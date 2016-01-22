@@ -1,12 +1,12 @@
 0. PPS setup for RPi
 ----------------------
 * sudo apt-get install pps-tools
-* Add <dtoverlay=pps-gpio,gpiopin=4> to end of /boot/config.txt (4 = adafruit GPS hat)
+* Add `dtoverlay=pps-gpio,gpiopin=4` to end of `/boot/config.txt` (4 = adafruit GPS hat)
 	* the same PPS pin will connect to both RPi gpio and SX1301 PPS trigger pin.
-* Add <pps-gpio> to the end of /etc/modules
+* Add `pps-gpio` to the end of `/etc/modules`
 * Reboot
-* after reboot, check for existance of </dev/pps0>
-* <sudo ppstest /dev/pps0>
+* after reboot, check for existance of `/dev/pps0`
+* `sudo ppstest /dev/pps0`
 * example code at http://github.com/ago/pps-tools
 
 	 / _____)             _              | |    
