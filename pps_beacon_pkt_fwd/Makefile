@@ -1,6 +1,6 @@
 ### Application-specific constants
 
-APP_NAME := basic_pkt_fwd
+APP_NAME := pps_beacon_pkt_fwd
 
 ### Environment constants 
 
@@ -31,6 +31,7 @@ ifneq ($(wildcard $(LGW_PATH)/inc/config.h),)
   LGW_INC += $(LGW_PATH)/inc/config.h
 endif
 LGW_INC += $(LGW_PATH)/inc/loragw_hal.h
+LGW_INC += $(LGW_PATH)/inc/loragw_gps.h
 
 ### Linking options
 
