@@ -196,8 +196,6 @@ static char status_report[STATUS_SIZE]; /* status report as a JSON object */
 static uint32_t beacon_period = 128; /* set beaconing period, must be a sub-multiple of 86400, the nb of sec in a day */
 static uint32_t beacon_offset = 0; /* must be < beacon_period, set when the beacon is emitted */
 static uint32_t beacon_freq_hz = 0; /* TX beacon frequency, in Hz */
-static bool beacon_next_pps = false; /* signal to prepare beacon packet for TX, no need for mutex */
-volatile bool _beacon_sent = false; /* wbr */
 
 /* auto-quit function */
 static uint32_t autoquit_threshold = 0; /* enable auto-quit after a number of non-acknowledged PULL_DATA (0 = disabled)*/
@@ -2063,94 +2061,72 @@ void beacon_pkt_init()
 	beacon_pkt.payload[16] = 0xFF & (field_crc2 >>  8);
 }
 
-void beacon_pkt_send()
+int beacon_pkt_send(uint32_t field_time)
 {
 	/* beacon data fields, byte 0 is Least Significant Byte */
-	uint32_t field_time; /* variable field */
 	uint8_t field_crc1; /* variable field */
 	uint16_t field_crc2;
-	int i;
+	int ret, i;
 
-			/* if beacon must be prepared, load it and wait for it to trigger */
-			if ((beacon_next_pps == true) && (gps_enabled == true)) {
-				pthread_mutex_lock(&mx_timeref);
-				beacon_next_pps = false;
-				if ((gps_ref_valid == true) && (xtal_correct_ok == true)) {
-					field_time = time_reference_gps.utc.tv_sec + 1; /* the beacon is prepared 1 sec before becon time */
-					pthread_mutex_unlock(&mx_timeref);
-					
-					/* load time in beacon payload */
-					beacon_pkt.payload[3] = 0xFF &  field_time;
-					beacon_pkt.payload[4] = 0xFF & (field_time >>  8);
-					beacon_pkt.payload[5] = 0xFF & (field_time >> 16);
-					beacon_pkt.payload[6] = 0xFF & (field_time >> 24);
-					
-					/* calculate CRC */
-					if (beacon_freq_hz < 902e3) {
-						// eu868
-						field_crc1 = crc8_ccit(beacon_pkt.payload, 7); /* CRC for the first 7 bytes */
-						beacon_pkt.payload[7] = field_crc1;
-					} else {
-						// us915
-						field_crc2 = crc_ccit((beacon_pkt.payload), 7); /* CRC for the first 7 bytes */
-						beacon_pkt.payload[7] = 0xFF &  field_crc2;
-						beacon_pkt.payload[8] = 0xFF & (field_crc2 >>  8);
-					}
-					
-					/* apply frequency correction to beacon TX frequency */
-					pthread_mutex_lock(&mx_xcorr);
-					beacon_pkt.freq_hz = (uint32_t)(xtal_correct * (double)beacon_freq_hz);
-					pthread_mutex_unlock(&mx_xcorr);
-					MSG("NOTE: [down] beacon ready to send (frequency %u Hz)\n", beacon_pkt.freq_hz);
-					
-					/* display beacon payload */
-					MSG("--- Beacon payload ---\n");
-					for (i=0; i<24; ++i) {
-						MSG("0x%02X", beacon_pkt.payload[i]);
-						if (i%8 == 7) {
-							MSG("\n");
-						} else {
-							MSG(" - ");
-						}
-					}
-					if (i%8 != 0) {
-						MSG("\n");
-					}
-					MSG("--- end of payload ---\n");
-					
-					/* send bacon packet and check for status */
-					pthread_mutex_lock(&mx_concent); /* may have to wait for a fetch to finish */
-					i = lgw_send(beacon_pkt);
-					pthread_mutex_unlock(&mx_concent); /* free concentrator ASAP */
-					if (i == LGW_HAL_ERROR) {
-						MSG("WARNING: [down] failed to send beacon packet\n");
-					} /*else {
-						tx_status_var = TX_STATUS_UNKNOWN;
-						for (i=0; (i < (1500/BEACON_POLL_MS)) && (tx_status_var != TX_FREE); ++i) {
-							wait_ms(BEACON_POLL_MS);
-							pthread_mutex_lock(&mx_concent);
-							lgw_status(TX_STATUS, &tx_status_var);
-							pthread_mutex_unlock(&mx_concent);
-						}
-						if (tx_status_var == TX_FREE) {
-							MSG("NOTE: [down] beacon sent successfully\n");
-						} else {
-							MSG("WARNING: [down] beacon was scheduled but failed to TX\n");
-						}
-					}*/
-				} else {
-					pthread_mutex_unlock(&mx_timeref);
-				}
+	/* if beacon must be prepared, load it and wait for it to trigger */
 
-				_beacon_sent = true;
-			} // ...if ((beacon_next_pps == true) && (gps_enabled == true))
+	pthread_mutex_unlock(&mx_timeref);
+	
+	/* load time in beacon payload */
+	beacon_pkt.payload[3] = 0xFF &  field_time;
+	beacon_pkt.payload[4] = 0xFF & (field_time >>  8);
+	beacon_pkt.payload[5] = 0xFF & (field_time >> 16);
+	beacon_pkt.payload[6] = 0xFF & (field_time >> 24);
+	
+	/* calculate CRC */
+	if (beacon_freq_hz < 902e3) {
+		// eu868
+		field_crc1 = crc8_ccit(beacon_pkt.payload, 7); /* CRC for the first 7 bytes */
+		beacon_pkt.payload[7] = field_crc1;
+	} else {
+		// us915
+		field_crc2 = crc_ccit((beacon_pkt.payload), 7); /* CRC for the first 7 bytes */
+		beacon_pkt.payload[7] = 0xFF &  field_crc2;
+		beacon_pkt.payload[8] = 0xFF & (field_crc2 >>  8);
+	}
+	
+	/* apply frequency correction to beacon TX frequency */
+	pthread_mutex_lock(&mx_xcorr);
+	beacon_pkt.freq_hz = (uint32_t)(xtal_correct * (double)beacon_freq_hz);
+	pthread_mutex_unlock(&mx_xcorr);
+	MSG("NOTE: [down] beacon ready to send (frequency %u Hz)\n", beacon_pkt.freq_hz);
+	
+	/* display beacon payload */
+	MSG("--- Beacon payload ---\n");
+	for (i=0; i<24; ++i) {
+		MSG("0x%02X", beacon_pkt.payload[i]);
+		if (i%8 == 7) {
+			MSG("\n");
+		} else {
+			MSG(" - ");
+		}
+	}
+	if (i%8 != 0) {
+		MSG("\n");
+	}
+	MSG("--- end of payload ---\n");
+	
+	/* send beacon packet and check for status */
+	pthread_mutex_lock(&mx_concent); /* may have to wait for a fetch to finish */
+	ret = lgw_send(beacon_pkt);
+	pthread_mutex_unlock(&mx_concent); /* free concentrator ASAP */
+	if (ret == LGW_HAL_ERROR) {
+		MSG("WARNING: [down] failed to send beacon packet\n");
+	} /*else {
+	}*/
+	return ret;
 }
 
 volatile bool _pps_first = true;
 void thread_pps(void)
 {
+	bool check_lgw_status = false;
 	struct timespec prev_beacon_sent_ts;
-	//struct timespec prev_beacon_next_pps_ts;
 	struct timespec timeout = { 3, 0 };
 	pps_info_t infobuf;
 	int ret;
@@ -2171,7 +2147,6 @@ void thread_pps(void)
 		printf("%d=time_pps_fetch() failed\n", ret);
 	}
 	prev_beacon_sent_ts = infobuf.assert_timestamp;
-	//prev_beacon_next_pps_ts = infobuf.assert_timestamp;
 
 	/* assuming PPS is trustworthy if it occurs */
 	xtal_correct_ok = true;
@@ -2186,39 +2161,12 @@ void thread_pps(void)
 				break;
 			printf("%d=time_pps_fetch() failed\n", ret);
 			sleep(1);
+			_pps_first = true;
+			gps_ref_valid = false;
 			continue;
 		}
-
-		if (_beacon_sent) {
-			double diff_sec = difftimespec(infobuf.assert_timestamp, prev_beacon_sent_ts);
-			_beacon_sent = false;
-			printf("beacon sent diff: %ims\n", (int)(1000 * diff_sec));
-			/*fprintf(log_file, "beacon sent diff: %ims\n", (int)(1000 * diff_sec));
-			fflush(log_file);*/
-			if (!_pps_first) {
-				if (fabs(diff_sec - beacon_period) > 0.1) {
-					quit_sig = true;
-				}
-			}
-			prev_beacon_sent_ts = infobuf.assert_timestamp;
-			_pps_first = false;
-		}
-
-		//printf("pps seq: %lu, ", infobuf.assert_sequence);
-		//printf("pps seq: %lu,  sec:%ld, nsec:% 6ld\n", infobuf.assert_sequence, infobuf.assert_timestamp.tv_sec, infobuf.assert_timestamp.tv_nsec);
-		if (beacon_period > 0) {
-			sec_of_cycle = (infobuf.assert_sequence + 1) % (time_t)(beacon_period);
-			//printf("%d,%d xtal_correct_ok:%d ", sec_of_cycle, beacon_offset, xtal_correct_ok);
-			if (sec_of_cycle == beacon_offset) {
-				beacon_next_pps = true;
-				/*fprintf(log_file, "beacon_next_pps diff: %ims\n", (int)(1000 * difftimespec(infobuf.assert_timestamp, prev_beacon_next_pps_ts)));
-				fflush(log_file);*/
-				//prev_beacon_next_pps_ts = infobuf.assert_timestamp;
-				beacon_pkt_send();
-			} else {
-				beacon_next_pps = false;
-			}
-		}
+		gps_ref_valid = true;
+		//printf("   PPS\n");
 
 		/* get timestamp captured on PPM pulse  */
 		pthread_mutex_lock(&mx_concent);
@@ -2235,6 +2183,7 @@ void thread_pps(void)
 			MSG("WARNING: [gps] could not get UTC time from GPS\n");
 			continue;
 		}
+		//printf("trig_tstamp:%u, utc_time.tv_sec:%u\n", trig_tstamp, utc_time.tv_sec);
 			
 		/* try to update time reference with the new UTC & timestamp */
 		pthread_mutex_lock(&mx_timeref);
@@ -2244,7 +2193,45 @@ void thread_pps(void)
 			MSG("WARNING: [gps] GPS out of sync, keeping previous time reference\n");
 			continue;
 		}
+
+		if (check_lgw_status) {
+			/* get result of previous lgw_send() */
+			uint8_t tx_status_var = TX_STATUS_UNKNOWN;
+			pthread_mutex_lock(&mx_concent);
+			lgw_status(TX_STATUS, &tx_status_var);
+			pthread_mutex_unlock(&mx_concent);
+			if (tx_status_var == TX_EMITTING) {
+				MSG("NOTE: [down] beacon emitting\n");
+			} else if (tx_status_var == TX_FREE) {
+				MSG("NOTE: [down] beacon sent successfully\n");
+				check_lgw_status = false;
+			} else {
+				MSG("WARNING: [down] beacon was scheduled but failed to TX\n");
+				check_lgw_status = false;
+			}
+		}
 			
+		if (beacon_period > 0) {
+			//sec_of_cycle = (infobuf.assert_sequence + 1) % (time_t)(beacon_period);
+			sec_of_cycle = (utc_time.tv_sec+1) % (time_t)(beacon_period);
+			if (sec_of_cycle == beacon_offset) {
+				if (beacon_pkt_send(utc_time.tv_sec+1) != LGW_HAL_ERROR) {
+					double diff_sec = difftimespec(infobuf.assert_timestamp, prev_beacon_sent_ts);
+					printf("beacon sent diff: %ims\n", (int)(1000 * diff_sec));
+					/*fprintf(log_file, "beacon sent diff: %ims\n", (int)(1000 * diff_sec));
+					fflush(log_file);*/
+					if (!_pps_first) {
+						/*if (fabs(diff_sec - beacon_period) > 0.1) {
+							quit_sig = true;
+						}*/
+					}
+					prev_beacon_sent_ts = infobuf.assert_timestamp;
+					_pps_first = false;
+					check_lgw_status = true;
+				}
+			} 
+		}
+
 		/* update gateway coordinates */
 		i = lgw_gps_get(NULL, &coord, &gpserr);
 		pthread_mutex_lock(&mx_meas_gps);
@@ -2257,7 +2244,6 @@ void thread_pps(void)
 			gps_coord_valid = false;
 		}
 		pthread_mutex_unlock(&mx_meas_gps);
-
 
 		//printf("\n");
 	}   // ...while (!exit_sig && !quit_sig)
@@ -2275,15 +2261,6 @@ void thread_gps(void) {
 
 	/* variables for PPM pulse GPS synchronization */
 	enum gps_msg latest_msg; /* keep track of latest NMEA message parsed */
-	//struct timespec utc_time; /* UTC time associated with PPS pulse */
-	//uint32_t trig_tstamp; /* concentrator timestamp associated with PPM pulse */
-	
-	/* position variable */
-	//struct coord_s coord;
-	//struct coord_s gpserr;
-	
-	/* variables for beaconing */
-	//uint32_t sec_of_cycle;
 	
 	/* initialize some variables before loop */
 	memset(serial_buff, 0, sizeof serial_buff);
@@ -2303,59 +2280,6 @@ void thread_gps(void) {
 		
 		if (latest_msg == NMEA_RMC) { /* trigger sync only on RMC frames */
 			
-#if 0
-			/* get UTC time for synchronization */
-			i = lgw_gps_get(&utc_time, NULL, NULL);
-			if (i != LGW_GPS_SUCCESS) {
-				MSG("WARNING: [gps] could not get UTC time from GPS\n");
-				continue;
-			}
-#endif /* #if 0 */
-			
-#if 0
-			/* check if beacon must be sent */
-			if (beacon_period > 0) {
-				sec_of_cycle = (utc_time.tv_sec + 1) % (time_t)(beacon_period);
-				if (sec_of_cycle == beacon_offset) {
-					beacon_next_pps = true;
-				} else {
-					beacon_next_pps = false;
-				}
-			}
-#endif /* #if 0 */
-
-#if 0
-			/* get timestamp captured on PPM pulse  */
-			pthread_mutex_lock(&mx_concent);
-			i = lgw_get_trigcnt(&trig_tstamp);
-			pthread_mutex_unlock(&mx_concent);
-			if (i != LGW_HAL_SUCCESS) {
-				MSG("WARNING: [gps] failed to read concentrator timestamp\n");
-				continue;
-			}
-			
-			/* try to update time reference with the new UTC & timestamp */
-			pthread_mutex_lock(&mx_timeref);
-			i = lgw_gps_sync(&time_reference_gps, trig_tstamp, utc_time);
-			pthread_mutex_unlock(&mx_timeref);
-			if (i != LGW_GPS_SUCCESS) {
-				MSG("WARNING: [gps] GPS out of sync, keeping previous time reference\n");
-				continue;
-			}
-			
-			/* update gateway coordinates */
-			i = lgw_gps_get(NULL, &coord, &gpserr);
-			pthread_mutex_lock(&mx_meas_gps);
-			if (i == LGW_GPS_SUCCESS) {
-				gps_coord_valid = true;
-				meas_gps_coord = coord;
-				meas_gps_err = gpserr;
-				// TODO: report other GPS statistics (typ. signal quality & integrity)
-			} else {
-				gps_coord_valid = false;
-			}
-			pthread_mutex_unlock(&mx_meas_gps);
-#endif /* #if 0 */
 		} // ...if (latest_msg == NMEA_RMC)
 		
 	}

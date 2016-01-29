@@ -8,6 +8,8 @@
 * after reboot, check for existance of `/dev/pps0`
 * `sudo ppstest /dev/pps0`
 * example code at http://github.com/ago/pps-tools
+* for optimal NMEA from serial port, run `stty -F /dev/ttyAMA0 raw 9600 cs8 clocal -cstopb`
+
 
 	 / _____)             _              | |    
 	( (____  _____ ____ _| |_ _____  ____| |__  
