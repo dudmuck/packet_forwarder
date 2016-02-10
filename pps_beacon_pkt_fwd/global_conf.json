@@ -202,7 +202,7 @@
         "serv_port_down": 1780,
         /* adjust the following parameters for your network */
         "keepalive_interval": 10,
-        "stat_interval": 30,
+        "stat_interval": 60,
         "push_timeout_ms": 100,
         /* forward only valid packets */
         "forward_crc_valid": true,
