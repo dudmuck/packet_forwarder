@@ -4,8 +4,11 @@
 * Add `dtoverlay=pps-gpio,gpiopin=4` to end of `/boot/config.txt` (4 = adafruit GPS hat)
 	* the same PPS pin will connect to both RPi gpio and SX1301 PPS trigger pin.
 * Add `pps-gpio` to the end of `/etc/modules`
+* for user access to pps device, put into `/etc/udev/rules.d/` file such as `80-pps.rules`: 
+	* `KERNEL=="pps0", SUBSYSTEM=="pps", DRIVER=="", SYMLINK+="gpspps0", MODE="0666"`
 * Reboot
 * after reboot, check for existance of `/dev/pps0`
+* `apt-get install pps-tools`
 * `sudo ppstest /dev/pps0`
 * example code at http://github.com/ago/pps-tools
 * for optimal NMEA from serial port, run `stty -F /dev/ttyAMA0 raw 9600 cs8 clocal -cstopb`
