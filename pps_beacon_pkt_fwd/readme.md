@@ -11,6 +11,10 @@
 * `sudo ppstest /dev/pps0`
 	* if you added udev rules in above step, sudo shouldnt be necessary.
 * example code at http://github.com/ago/pps-tools
+
+0.1 NMEA uart setup
+* remove /dev/ttyAMA0 from /boot/cmdline.txt
+* comment out ttyAMA0 line from /etc/inittab
 * for optimal NMEA from serial port, run `stty -F /dev/ttyAMA0 raw 9600 cs8 clocal -cstopb`
 
 
