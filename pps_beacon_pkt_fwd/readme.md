@@ -8,7 +8,6 @@
 	* `KERNEL=="pps0", SUBSYSTEM=="pps", DRIVER=="", SYMLINK+="gpspps0", MODE="0666"`
 * Reboot
 * after reboot, check for existance of `/dev/pps0`
-* `apt-get install pps-tools`
 * `sudo ppstest /dev/pps0`
 	* if you added udev rules in above step, sudo shouldnt be necessary.
 * example code at http://github.com/ago/pps-tools
