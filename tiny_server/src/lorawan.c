@@ -4,6 +4,8 @@
 #include <string.h>
 #include <stdlib.h>         /* atoi, exit */
 #include <time.h>
+#include <unistd.h>
+#include <sys/select.h>
 #include "loragw_hal.h"
 #include "lorawan.h"
 #include "aes.h"
@@ -147,6 +149,11 @@ typedef struct {
     uint16_t DevNonce;
 } __attribute__((packed)) join_req_t;
 
+struct _devNonce_list {
+    uint16_t value;
+    time_t last_seen;
+    struct _devNonce_list* next;
+};
 
 typedef struct {
     uint8_t app_eui[LORA_EUI_LENGTH];
@@ -158,6 +165,8 @@ typedef struct {
     uint8_t app_session_key[LORA_CYPHERKEYBYTES];
 
     uint16_t FCntDown;
+
+    struct _devNonce_list* devNonce_list;
 } mote_t;
 
 struct _mote_list {
@@ -200,6 +209,13 @@ typedef struct {
 uint32_t network_id;
 uint32_t networkAddress = 0;  // bits 24..0 of DevAddr, for join accept
 uint8_t tx_rf_chain;    // written by sx1301 conf
+unsigned int join_ignore_count = 0;
+unsigned int current_join_attempt = 0;
+unsigned int devnonce_experation = 600; // in seconds
+#define DEVNONCE_HISTORY_SIZE   20  /* how many devNonce to keep */
+
+uint8_t user_downlink[128];
+int user_downlink_length = -1;
 
 void print_octets(char const* label, uint8_t const* buf, uint8_t buf_len)
 {
@@ -375,13 +391,14 @@ void LoRa_GenerateJoinFrameIntegrityCode(const uint8_t key[], uint8_t const inpu
 }
 
 static void
-send_downlink(struct lgw_pkt_tx_s* tx_pkt, mote_t* mote, uint32_t rx_count_us)
+send_downlink_(struct lgw_pkt_tx_s* tx_pkt, mote_t* mote, uint32_t rx_count_us)
 {
     fhdr_t* fhdr = (fhdr_t*)&tx_pkt->payload[1];
     uint8_t* mic_ptr;
     fhdr->DevAddr = mote->dev_addr; // if different address, then multicast
     fhdr->FCnt = mote->FCntDown++;
-    tx_pkt->size = LORA_MACHEADERLENGTH + sizeof(fhdr_t) + fhdr->FCtrl.bits.FOptsLen;
+    // tx_pkt->size must have already FRMPayload length or zero
+    tx_pkt->size += LORA_MACHEADERLENGTH + sizeof(fhdr_t) + fhdr->FCtrl.bits.FOptsLen;
     mic_ptr = &tx_pkt->payload[tx_pkt->size];
     LoRa_GenerateDataFrameIntegrityCode(mote->network_session_key, tx_pkt->payload, tx_pkt->size, fhdr->DevAddr, false, fhdr->FCnt, mic_ptr);
     tx_pkt->size += LORA_FRAMEMICBYTES;
@@ -424,6 +441,7 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* cmd_buf, u
     /* generate ack reply */
     struct lgw_pkt_tx_s tx_pkt;
     uint8_t* fopts_ptr = &tx_pkt.payload[sizeof(mhdr_t) + sizeof(fhdr_t)];
+    tx_pkt.size = 0;
     fhdr_t* fhdr = (fhdr_t*)&tx_pkt.payload[1];
     mhdr_t *mhdr_rx = (mhdr_t*)&rx_pkt->payload[0];
     mhdr_t *mhdr_tx = (mhdr_t*)&tx_pkt.payload[0];
@@ -438,7 +456,7 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* cmd_buf, u
     *fopts_ptr = SRV_MAC_PING_SLOT_INFO_ANS;
 
     band_conv(rx_pkt, &tx_pkt);
-    send_downlink(&tx_pkt, mote, rx_pkt->count_us);
+    send_downlink_(&tx_pkt, mote, rx_pkt->count_us);
 
 }
 
@@ -476,9 +494,9 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
     int o = sizeof(mhdr_t) + sizeof(fhdr_t) + fhdr->FCtrl.bits.FOptsLen;
     uint8_t FRMPayload_length = (rx_pkt->size - LORA_FRAMEMICBYTES) - (o + 1);
     uint8_t* FRMPayload = &rx_pkt->payload[o+1];
-    uint8_t* fport_ptr = &rx_pkt->payload[o];
+    uint8_t* rx_fport_ptr = &rx_pkt->payload[o];
 
-    printf("o:%d fport:%d FRMPayload_length:%d\n", o, *fport_ptr, FRMPayload_length);
+    printf("o:%d fport:%d FRMPayload_length:%d\n", o, *rx_fport_ptr, FRMPayload_length);
     for (o = 0; o < FRMPayload_length; o++) {
         printf("%02x ", FRMPayload[o]);
     }
@@ -504,7 +522,7 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
         printf("%02x ", decrypted[o]);
     }
 
-    if (mhdr->bits.MType != MTYPE_CONF_UP) {
+    if (mhdr->bits.MType != MTYPE_CONF_UP && user_downlink_length == -1) {
         printf("\n");
         return;
     }
@@ -512,14 +530,30 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
     /* schedule downlink tx confirm */
     /* 4byte devaddr, 1byte fCtrl, 2byte sequenceCounter, 4byte MIC */
     struct lgw_pkt_tx_s tx_pkt;
-    tx_pkt.payload[0] = MTYPE_CONF_DN << 5; // MHDR
+    tx_pkt.size = 0;
+    if (mhdr->bits.MType == MTYPE_CONF_UP)
+        tx_pkt.payload[0] = MTYPE_CONF_DN << 5; // MHDR
+    else if (mhdr->bits.MType == MTYPE_UNCONF_UP)
+        tx_pkt.payload[0] = MTYPE_UNCONF_DN << 5; // MHDR
+
     fhdr = (fhdr_t*)&tx_pkt.payload[1];
     fhdr->FCtrl.octet = 0;
     fhdr->FCtrl.bits.FOptsLen = 0;
     fhdr->FCtrl.bits.ACK = 1;
 
+    if (user_downlink_length != -1) {
+        /* add user payload */
+        int o = sizeof(mhdr_t) + sizeof(fhdr_t) + fhdr->FCtrl.bits.FOptsLen;
+        uint8_t* tx_fport_ptr = &tx_pkt.payload[o];
+        uint8_t* FRMPayload = &tx_pkt.payload[o+1];
+        LoRa_EncryptPayload(mote->app_session_key, user_downlink, user_downlink_length, mote->dev_addr, false, mote->FCntDown, FRMPayload);
+        *tx_fport_ptr = *rx_fport_ptr;
+        tx_pkt.size = user_downlink_length + 1; // +1 for fport
+        user_downlink_length = -1;  // mark as sent
+    }
+
     band_conv(rx_pkt, &tx_pkt);
-    send_downlink(&tx_pkt, mote, rx_pkt->count_us);
+    send_downlink_(&tx_pkt, mote, rx_pkt->count_us);
 
     printf("\n");
 }
@@ -591,26 +625,6 @@ void SendJoinComplete(uint16_t deviceNonce, uint8_t firstReceiveWindowDataRateof
     CryptJoinServer(mote->app_key, &uncyphered[LORA_MACHEADERLENGTH], cypherBytes, &tx_pkt.payload[LORA_MACHEADERLENGTH]);
 
     /**** RF TX ********/
-#if 0
-struct lgw_pkt_tx_s {
-    uint32_t    freq_hz;        /*!> center frequency of TX */
-    uint8_t     tx_mode;        /*!> select on what event/time the TX is triggered */
-    uint32_t    count_us;       /*!> timestamp or delay in microseconds for TX trigger */
-    uint8_t     rf_chain;       /*!> through which RF chain will the packet be sent */
-    int8_t      rf_power;       /*!> TX power, in dBm */
-    uint8_t     modulation;     /*!> modulation to use for the packet */
-    uint8_t     bandwidth;      /*!> modulation bandwidth (LoRa only) */
-    uint32_t    datarate;       /*!> TX datarate (baudrate for FSK, SF for LoRa) */
-    uint8_t     coderate;       /*!> error-correcting code of the packet (LoRa only) */
-    bool        invert_pol;     /*!> invert signal polarity, for orthogonal downlinks (LoRa only) */
-    uint8_t     f_dev;          /*!> frequency deviation, in kHz (FSK only) */
-    uint16_t    preamble;       /*!> set the preamble length, 0 for default */
-    bool        no_crc;         /*!> if true, do not send a CRC in the packet */
-    bool        no_header;      /*!> if true, enable implicit header mode (LoRa), fixed length (FSK) */
-    uint16_t    size;           /*!> payload size in bytes */
-    uint8_t     payload[256];   /*!> buffer containing the payload */
-};
-#endif /* #if 0 */
     tx_pkt.coderate = CR_LORA_4_5;
     tx_pkt.modulation = MOD_LORA;
 
@@ -647,6 +661,59 @@ struct lgw_pkt_tx_s {
     //print_octets("app_session_key", mote->app_session_key, LORA_CYPHERKEYBYTES);
 }
 
+static int
+check_devnonce(mote_t* mote, uint16_t DevNonce)
+{
+
+    if (mote->devNonce_list == NULL) {
+        /* first join attempt seen from this mote */
+        mote->devNonce_list = malloc(sizeof(struct _devNonce_list));
+        memset(mote->devNonce_list, 0, sizeof(struct _devNonce_list));
+        mote->devNonce_list->value = DevNonce;
+        mote->devNonce_list->last_seen = time(NULL);
+        return 0;
+    }
+    /* subsequent join attempt */
+    int history_cnt = 0;
+    struct _devNonce_list* my_devNonce_list = mote->devNonce_list;
+    while (my_devNonce_list != NULL) {
+        time_t now = time(NULL);
+        history_cnt++;
+        /* check this devnonce against previous */
+        //printf("%d: %04x, %lu\n", history_cnt, my_devNonce_list->value, now-my_devNonce_list->last_seen);
+        if (my_devNonce_list->value == DevNonce && (now-my_devNonce_list->last_seen < devnonce_experation)) {
+            printf("devNonce %04x seen %lu seconds ago\n", DevNonce, now - my_devNonce_list->last_seen);
+            return -1;
+        }
+        if (my_devNonce_list->next == NULL)
+            break;
+        my_devNonce_list = my_devNonce_list->next;
+    }
+    if (history_cnt < DEVNONCE_HISTORY_SIZE) {
+        /* add new */
+        my_devNonce_list->next = malloc(sizeof(struct _devNonce_list));
+        my_devNonce_list = my_devNonce_list->next;
+        memset(my_devNonce_list , 0, sizeof(struct _devNonce_list));
+        my_devNonce_list->value = DevNonce;
+        my_devNonce_list->last_seen = time(NULL);
+    } else {
+        /* overwrite oldest */
+        struct _devNonce_list* oldest_devNonce_list = NULL;
+        time_t oldest_time = time(NULL);
+        my_devNonce_list = mote->devNonce_list;
+        while (my_devNonce_list != NULL) {
+            if (my_devNonce_list->last_seen < oldest_time) {
+                oldest_time = my_devNonce_list->last_seen;
+                oldest_devNonce_list = my_devNonce_list;
+            }
+            my_devNonce_list = my_devNonce_list->next;
+        }
+        oldest_devNonce_list->value = DevNonce;
+        oldest_devNonce_list->last_seen = time(NULL);
+    }
+    return 0;
+}
+
 static void
 parse_join_req(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
 {
@@ -660,8 +727,25 @@ parse_join_req(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
         return;
     }
 
-    //printf("B-DevNonce:%04x ", jreq_ptr->DevNonce);
-    SendJoinComplete(jreq_ptr->DevNonce, 0, 8, 1, mote, rx_pkt);
+    printf("join-DevNonce:%04x ", jreq_ptr->DevNonce);
+    if (check_devnonce(mote, jreq_ptr->DevNonce) < 0) {
+        printf("devNonce fail\n");
+        return;
+    }
+    
+    if (join_ignore_count > 0) {
+        /* simulate failed join attempts (force retries) */
+        ++current_join_attempt;
+        printf("current_join_attempt:%d, ignore:%d {%d} ", current_join_attempt, join_ignore_count, current_join_attempt % join_ignore_count);
+        if ((current_join_attempt % join_ignore_count) != 0) {
+            printf("block\n");
+            return;
+        }
+            printf("allow\n");
+    }
+
+    Rx2ChannelParams_t Rx2Channel = RX_WND_2_CHANNEL;
+    SendJoinComplete(jreq_ptr->DevNonce, 0, Rx2Channel.Datarate, 1, mote, rx_pkt);
 
 }
 
@@ -695,7 +779,19 @@ lorawan_parse_uplink(struct lgw_pkt_rx_s *p)
             }
             mote_list_ptr = mote_list_ptr->next;
         }
-        parse_join_req(&mote_list_ptr->mote, p);
+
+        if (mote_list_ptr == NULL) {
+            printf("mote not in .json:\n");
+            printf("AppEUI:");
+            for (o = LORA_EUI_LENGTH-1; o >= 0; o--)
+                printf("%02x ", join_req->AppEUI[o]);
+            printf("\nDevEUI:");
+            for (o = LORA_EUI_LENGTH-1; o >= 0; o--)
+                printf("%02x ", join_req->DevEUI[o]);
+            printf("\n");
+        } else
+            parse_join_req(&mote_list_ptr->mote, p);
+
     } else if (mhdr->bits.MType == MTYPE_UNCONF_UP || mhdr->bits.MType == MTYPE_CONF_UP) {
         fhdr_t *fhdr = (fhdr_t*)&p->payload[1];
         if (mhdr->bits.MType == MTYPE_UNCONF_UP)
@@ -724,6 +820,27 @@ lorawan_parse_uplink(struct lgw_pkt_rx_s *p)
     } else
         printf("%02x mtype:%d", p->payload[0], mhdr->bits.MType);
 
+}
+
+bool inputAvailable()  
+{
+  struct timeval tv;
+  fd_set fds;
+  tv.tv_sec = 0;
+  tv.tv_usec = 0;
+  FD_ZERO(&fds);
+  FD_SET(STDIN_FILENO, &fds);
+  select(STDIN_FILENO+1, &fds, NULL, NULL, &tv);
+  return (FD_ISSET(0, &fds));
+}
+
+void
+lorawan_kbd_input()
+{
+    if (inputAvailable()) {
+        user_downlink_length = read(STDIN_FILENO, user_downlink, sizeof(user_downlink));
+        printf("user_downlink:%d,%s\n", user_downlink_length, user_downlink);
+    }
 }
 
 
@@ -893,6 +1010,12 @@ int parse_lorawan_configuration(const char * conf_file)
     if (val != NULL) {
         dl_rxwin = (uint32_t)json_value_get_number(val);
     }
+
+    val = json_object_get_value(conf_obj, "join_ignore_count");
+    if (val != NULL) {
+        join_ignore_count = (uint32_t)json_value_get_number(val);
+    }
+
 
     //show_motes();
     srand(time(NULL));

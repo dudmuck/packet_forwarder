@@ -804,10 +804,6 @@ void thread_up(void) {
     /* report management variable */
     bool send_report = false;
 
-    /* mote info variables */
-    //uint32_t mote_addr = 0;
-    //uint16_t mote_fcnt = 0;
-
     while (!exit_sig && !quit_sig) {
 
         /* fetch packets */
@@ -819,6 +815,7 @@ void thread_up(void) {
             exit(EXIT_FAILURE);
         }
 
+        lorawan_kbd_input();
         /* check if there are status report to send */
         /* no mutex, we're only reading */
 

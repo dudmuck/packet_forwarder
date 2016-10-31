@@ -1,5 +1,6 @@
 #include "loragw_hal.h"
 
+void lorawan_kbd_input(void);
 void lorawan_parse_uplink(struct lgw_pkt_rx_s *p);
 int parse_lorawan_configuration(const char * conf_file);
 
