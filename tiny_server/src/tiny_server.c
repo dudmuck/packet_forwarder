@@ -147,7 +147,7 @@ static int parse_gateway_configuration(const char * conf_file);
 
 //static uint16_t crc_ccit(const uint8_t * data, unsigned size);
 
-//static double difftimespec(struct timespec end, struct timespec beginning);
+double difftimespec(struct timespec end, struct timespec beginning);
 
 /* threads */
 void thread_up(void);
@@ -172,7 +172,10 @@ static int parse_SX1301_configuration(const char * conf_file) {
     const char conf_obj_name[] = "SX1301_conf";
     JSON_Value *root_val = NULL;
     JSON_Object *conf_obj = NULL;
+    JSON_Object *conf_lbt_obj = NULL;
     JSON_Value *val = NULL;
+    JSON_Array *conf_array = NULL;
+    JSON_Object *conf_lbtchan_obj = NULL;
     struct lgw_conf_board_s boardconf;
     struct lgw_conf_lbt_s lbtconf;
     struct lgw_conf_rxrf_s rfconf;
@@ -217,65 +220,77 @@ static int parse_SX1301_configuration(const char * conf_file) {
         MSG("WARNING: Failed to configure board\n");
     }
 
-    /* LBT struct*/
+    /* set LBT configuration */
     memset(&lbtconf, 0, sizeof lbtconf); /* initialize configuration structure */
-    val = json_object_get_value(conf_obj, "lbt_cfg"); /* fetch value (if possible) */
-    if (json_value_get_type(val) != JSONObject) {
+    conf_lbt_obj = json_object_get_object(conf_obj, "lbt_cfg"); /* fetch value (if possible) */
+    if (conf_lbt_obj == NULL) {
         MSG("INFO: no configuration for LBT\n");
     } else {
-        val = json_object_dotget_value(conf_obj, "lbt_cfg.enable"); /* fetch value (if possible) */
+        val = json_object_get_value(conf_lbt_obj, "enable"); /* fetch value (if possible) */
         if (json_value_get_type(val) == JSONBoolean) {
             lbtconf.enable = (bool)json_value_get_boolean(val);
         } else {
             MSG("WARNING: Data type for lbt_cfg.enable seems wrong, please check\n");
             lbtconf.enable = false;
         }
-        val = json_object_dotget_value(conf_obj, "lbt_cfg.rssi_target"); /* fetch value (if possible) */
-        if (json_value_get_type(val) == JSONNumber) {
-            lbtconf.rssi_target = (uint8_t)json_value_get_number(val);
+        if (lbtconf.enable == true) {
+            val = json_object_get_value(conf_lbt_obj, "rssi_target"); /* fetch value (if possible) */
+            if (json_value_get_type(val) == JSONNumber) {
+                lbtconf.rssi_target = (int8_t)json_value_get_number(val);
+            } else {
+                MSG("WARNING: Data type for lbt_cfg.rssi_target seems wrong, please check\n");
+                lbtconf.rssi_target = 0;
+            }
+            val = json_object_get_value(conf_lbt_obj, "sx127x_rssi_offset"); /* fetch value (if possible) */
+            if (json_value_get_type(val) == JSONNumber) {
+                lbtconf.rssi_offset = (int8_t)json_value_get_number(val);
+            } else {
+                MSG("WARNING: Data type for lbt_cfg.sx127x_rssi_offset seems wrong, please check\n");
+                lbtconf.rssi_offset = 0;
+            }
+            /* set LBT channels configuration */
+            conf_array = json_object_get_array(conf_lbt_obj, "chan_cfg");
+            if (conf_array != NULL) {
+                lbtconf.nb_channel = json_array_get_count( conf_array );
+                MSG("INFO: %u LBT channels configured\n", lbtconf.nb_channel);
+            }
+            for (i = 0; i < (int)lbtconf.nb_channel; i++) {
+                /* Sanity check */
+                if (i >= LBT_CHANNEL_FREQ_NB)
+                {
+                    MSG("ERROR: LBT channel %d not supported, skip it\n", i );
+                    break;
+                }
+                /* Get LBT channel configuration object from array */
+                conf_lbtchan_obj = json_array_get_object(conf_array, i);
+
+                /* Channel frequency */
+                val = json_object_dotget_value(conf_lbtchan_obj, "freq_hz"); /* fetch value (if possible) */
+                if (json_value_get_type(val) == JSONNumber) {
+                    lbtconf.channels[i].freq_hz = (uint32_t)json_value_get_number(val);
+                } else {
+                    MSG("WARNING: Data type for lbt_cfg.channels[%d].freq_hz seems wrong, please check\n", i);
+                    lbtconf.channels[i].freq_hz = 0;
+                }
+
+                /* Channel scan time */
+                val = json_object_dotget_value(conf_lbtchan_obj, "scan_time_us"); /* fetch value (if possible) */
+                if (json_value_get_type(val) == JSONNumber) {
+                    lbtconf.channels[i].scan_time_us = (uint16_t)json_value_get_number(val);
+                } else {
+                    MSG("WARNING: Data type for lbt_cfg.channels[%d].scan_time_us seems wrong, please check\n", i);
+                    lbtconf.channels[i].scan_time_us = 0;
+                }
+            }
+
+            /* all parameters parsed, submitting configuration to the HAL */
+            if (lgw_lbt_setconf(lbtconf) != LGW_HAL_SUCCESS) {
+                MSG("ERROR: Failed to configure LBT\n");
+                return -1;
+            }
         } else {
-            MSG("WARNING: Data type for lbt_cfg.rssi_target seems wrong, please check\n");
-            lbtconf.rssi_target = 0;
+            MSG("INFO: LBT is disabled\n");
         }
-        val = json_object_dotget_value(conf_obj, "lbt_cfg.nb_channel"); /* fetch value (if possible) */
-        if (json_value_get_type(val) == JSONNumber) {
-            lbtconf.nb_channel = (uint8_t)json_value_get_number(val);
-        } else {
-            MSG("WARNING: Data type for lbt_cfg.nb_channel seems wrong, please check\n");
-            lbtconf.nb_channel = 0;
-        }
-        val = json_object_dotget_value(conf_obj, "lbt_cfg.start_freq"); /* fetch value (if possible) */
-        if (json_value_get_type(val) == JSONNumber) {
-            lbtconf.start_freq = (uint32_t)json_value_get_number(val);
-        } else {
-            MSG("WARNING: Data type for lbt_cfg.start_freq seems wrong, please check\n");
-            lbtconf.start_freq = 0;
-        }
-        val = json_object_dotget_value(conf_obj, "lbt_cfg.scan_time_us"); /* fetch value (if possible) */
-        if (json_value_get_type(val) == JSONNumber) {
-            lbtconf.scan_time_us = (uint32_t)json_value_get_number(val);
-        } else {
-            MSG("WARNING: Data type for lbt_cfg.scan_time_us seems wrong, please check\n");
-            lbtconf.scan_time_us = 0;
-        }
-        val = json_object_dotget_value(conf_obj, "lbt_cfg.tx_delay_1ch_us"); /* fetch value (if possible) */
-        if (json_value_get_type(val) == JSONNumber) {
-            lbtconf.tx_delay_1ch_us = (uint32_t)json_value_get_number(val);
-        } else {
-            MSG("WARNING: Data type for lbt_cfg.tx_delay_1ch_us seems wrong, please check\n");
-            lbtconf.tx_delay_1ch_us = 0;
-        }
-        val = json_object_dotget_value(conf_obj, "lbt_cfg.tx_delay_2ch_us"); /* fetch value (if possible) */
-        if (json_value_get_type(val) == JSONNumber) {
-            lbtconf.tx_delay_2ch_us = (uint32_t)json_value_get_number(val);
-        } else {
-            MSG("WARNING: Data type for lbt_cfg.tx_delay_2ch_us seems wrong, please check\n");
-            lbtconf.tx_delay_2ch_us = 0;
-        }
-    }
-    /* all parameters parsed, submitting configuration to the HAL */
-    if (lgw_lbt_setconf(lbtconf) != LGW_HAL_SUCCESS) {
-        MSG("WARNING: Failed to configure lbt\n");
     }
 
     /* set antenna gain configuration */
@@ -616,58 +631,38 @@ static int parse_gateway_configuration(const char * conf_file) {
     return 0;
 }
 
-#if 0
-static uint16_t crc_ccit(const uint8_t * data, unsigned size) {
-    const uint16_t crc_poly = 0x1021; /* CCITT */
-    const uint16_t init_val = 0xFFFF; /* CCITT */
-    uint16_t x = init_val;
-    unsigned i, j;
+static uint16_t BeaconCrc( uint8_t *buffer, uint16_t length )
+{
+    // The CRC calculation follows CCITT
+    const uint16_t polynom = 0x1021;
+    // CRC initial value
+    uint16_t crc = 0x0000;
 
-    if (data == NULL)  {
+    if( buffer == NULL )
+    {
         return 0;
     }
 
-    for (i=0; i<size; ++i) {
-        x ^= (uint16_t)data[i] << 8;
-        for (j=0; j<8; ++j) {
-            x = (x & 0x8000) ? (x<<1) ^ crc_poly : (x<<1);
+    for( uint16_t i = 0; i < length; ++i )
+    {
+        crc ^= ( uint16_t ) buffer[i] << 8;
+        for( uint16_t j = 0; j < 8; ++j )
+        {
+            crc = ( crc & 0x8000 ) ? ( crc << 1 ) ^ polynom : ( crc << 1 );
         }
     }
 
-    return x;
+    return crc;
 }
-#endif /* #if 0 */
 
-#if 0
-static uint8_t crc8_ccit(const uint8_t * data, unsigned size) {
-    const uint8_t crc_poly = 0x87; /* CCITT */
-    const uint8_t init_val = 0xFF; /* CCITT */
-    uint8_t x = init_val;
-    unsigned i, j;
-
-    if (data == NULL)  {
-        return 0;
-    }
-
-    for (i=0; i<size; ++i) {
-        x ^= data[i];
-        for (j=0; j<8; ++j) {
-            x = (x & 0x80) ? (x<<1) ^ crc_poly : (x<<1);
-        }
-    }
-
-    return x;
-}
-#endif
-
-/*static double difftimespec(struct timespec end, struct timespec beginning) {
+double difftimespec(struct timespec end, struct timespec beginning) {
     double x;
 
     x = 1E-9 * (double)(end.tv_nsec - beginning.tv_nsec);
     x += (double)(end.tv_sec - beginning.tv_sec);
 
     return x;
-}*/
+}
 
 /* -------------------------------------------------------------------------- */
 /* --- MAIN FUNCTION -------------------------------------------------------- */
@@ -839,10 +834,155 @@ void thread_up(void) {
 /* -------------------------------------------------------------------------- */
 /* --- THREAD 2: POLLING SERVER AND ENQUEUING PACKETS IN JIT QUEUE ---------- */
 
-void thread_down(void) {
-    while (!exit_sig && !quit_sig) {
-        sleep(1);
-    }
+
+//#define BEACON_SIZE     19
+float g_sx1301_ppm_err = 0;
+uint32_t trigcnt_pingslot_zero;
+struct timespec g_last_beacon_sent_at;
+
+void thread_down(void)
+{
+    float sx1301_ppm_err = 0, prev_sx1301_ppm_err = 0;
+    uint32_t lgw_trigcnt;
+    struct timespec /*now,*/ rem, beacon_start_ts, pingslot_start_ts, saved_ts;
+    struct timespec beacon_sent_at, prev_beacon_sent_at = { 0 };
+    struct lgw_pkt_tx_s tx_pkt;
+    uint8_t rfuOffset1 = 0;
+    uint8_t rfuOffset2 = 0;
+    double s2b;
+    uint32_t beacon_start_mask = beacon_period-1;
+
+#if defined( USE_BAND_915 ) || defined( USE_BAND_915_HYBRID )
+    rfuOffset1 = 1;
+    rfuOffset2 = 1;
+#endif
+    lgw_get_trigcnt(&lgw_trigcnt);
+    if (clock_gettime (CLOCK_MONOTONIC, &beacon_start_ts) == -1)
+        perror ("clock_gettime");
+
+    BeaconCtx.Cfg.Interval = beacon_period * 1000;
+    BeaconCtx.BeaconTime = 0;
+
+    saved_ts.tv_sec = beacon_start_ts.tv_sec;
+    saved_ts.tv_nsec = beacon_start_ts.tv_nsec;
+    /* establish first beacon start: */
+    beacon_start_ts.tv_sec = (beacon_start_ts.tv_sec | beacon_start_mask) + 1;
+    beacon_start_ts.tv_nsec = 0;
+    s2b = difftimespec(beacon_start_ts, saved_ts);
+    lgw_trigcnt_at_next_beacon = lgw_trigcnt + (s2b * 1000000);
+
+    pingslot_start_ts.tv_sec = beacon_start_ts.tv_sec - beacon_period;
+    pingslot_start_ts.tv_nsec = beacon_start_ts.tv_nsec;
+    /* beacon_reserved: */
+    pingslot_start_ts.tv_sec += 2;
+    pingslot_start_ts.tv_nsec += 120000000;
+    printf("beacon_start_ts.tv_sec:%lu pingslot_start:%lu.%lu\n", beacon_start_ts.tv_sec, pingslot_start_ts.tv_sec, pingslot_start_ts.tv_nsec);
+    
+    while (!exit_sig && !quit_sig)
+    {
+        uint16_t crc0, crc1;
+        int ret;
+
+        ret = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &beacon_start_ts, &rem);
+        if (ret == EFAULT) {
+            //hal_run = false;
+            printf("EFAULT\n");
+        } else if (ret == EINTR) {
+            printf("EINTR\n");
+        } else if (ret == EINVAL) {
+            printf("EINVAL\n");
+            printf("dly.tv_nsec:%lu\n", beacon_start_ts.tv_nsec);
+            printf("dly.tv_sec:%lu\n", beacon_start_ts.tv_sec);
+            //hal_run = false;
+        }
+        lgw_get_trigcnt(&lgw_trigcnt);
+
+        tx_pkt.size = BEACON_SIZE;
+        
+        tx_pkt.payload[2 + rfuOffset1] = beacon_start_ts.tv_sec;
+        tx_pkt.payload[3 + rfuOffset1] = beacon_start_ts.tv_sec >> 8;
+        tx_pkt.payload[4 + rfuOffset1] = beacon_start_ts.tv_sec >> 16;
+        tx_pkt.payload[5 + rfuOffset1] = beacon_start_ts.tv_sec >> 24;
+
+        crc0 = BeaconCrc( tx_pkt.payload, 6 + rfuOffset1 );
+        printf("crc0:%04x to [%d],[%d]\n", crc0, 6+rfuOffset1, 7+rfuOffset1);
+        tx_pkt.payload[6 + rfuOffset1] = crc0;
+        tx_pkt.payload[7 + rfuOffset1] = crc0 >> 8;
+
+        crc1 = BeaconCrc( &tx_pkt.payload[8 + rfuOffset1], 7 + rfuOffset2 );
+        tx_pkt.payload[15 + rfuOffset1 + rfuOffset2] = crc1;
+        tx_pkt.payload[16 + rfuOffset1 + rfuOffset2] = crc1 >> 8;
+
+        tx_pkt.modulation = MOD_LORA;
+        tx_pkt.coderate = CR_LORA_4_5;
+        //not based on RX2: get_rx2_config(&tx_pkt);
+        tx_pkt.bandwidth = BEACON_BW;
+        tx_pkt.datarate = BEACON_SF;
+        tx_pkt.size = BEACON_SIZE;
+        tx_pkt.freq_hz = BEACON_CHANNEL_FREQ();
+        //printf("tx_pkt.freq_hz:%u\n", tx_pkt.freq_hz);
+
+        print_hal_sf(tx_pkt.datarate);
+        print_hal_bw(tx_pkt.bandwidth);
+        printf(" %.1fMHz\n", tx_pkt.freq_hz / 1e6);
+
+        tx_pkt.tx_mode = IMMEDIATE;
+        tx_pkt.rf_chain = tx_rf_chain;
+        tx_pkt.rf_power = 20;   // TODO
+        tx_pkt.invert_pol = false;
+        tx_pkt.preamble = STD_LORA_PREAMB;
+        tx_pkt.no_crc = true;
+        tx_pkt.no_header = true;   // beacon is fixed length
+
+        prev_beacon_sent_at.tv_sec = beacon_sent_at.tv_sec;
+        prev_beacon_sent_at.tv_nsec = beacon_sent_at.tv_nsec;
+        if (clock_gettime (CLOCK_MONOTONIC, &beacon_sent_at) == -1)
+            perror ("clock_gettime");
+
+        printf("BEACON: ");
+        if (lgw_send(tx_pkt) == LGW_HAL_ERROR) {
+            printf("lgw_send() failed\n");
+        }
+
+        printf("tx beacon: ");
+        for (ret = 0; ret < tx_pkt.size; ret++) 
+            printf("%02x ", tx_pkt.payload[ret]);
+        printf(" (%fs)\n", difftimespec(beacon_sent_at, prev_beacon_sent_at ));
+
+
+        g_last_beacon_sent_at.tv_sec = beacon_start_ts.tv_sec;
+        g_last_beacon_sent_at.tv_nsec = beacon_start_ts.tv_nsec;
+        /* set next beacon start */
+        beacon_start_ts.tv_sec += beacon_period;
+        pingslot_start_ts.tv_sec += beacon_period;
+        printf("beacon_start_ts.tv_sec:%lu pingslot_start:%lu.%lu\n", beacon_start_ts.tv_sec, pingslot_start_ts.tv_sec, pingslot_start_ts.tv_nsec);
+
+        int err = lgw_trigcnt_at_next_beacon - lgw_trigcnt;
+        /* negative err: sx1301 fast
+         * positive err: sx1301 slow
+         */
+        prev_sx1301_ppm_err = sx1301_ppm_err;
+        sx1301_ppm_err = err / (float)beacon_period;
+        g_sx1301_ppm_err = (sx1301_ppm_err + prev_sx1301_ppm_err) / 2.0;
+        //printf("lgw_trigcnt_at_next_beacon:%u, lgw_trigcnt:%u diff:%d ppm:%f gpe:%f ", lgw_trigcnt_at_next_beacon, lgw_trigcnt, err, sx1301_ppm_err, g_sx1301_ppm_err); // sx1301 timer error
+        printf("diff:%d ppm:%f gpe:%f ", err, sx1301_ppm_err, g_sx1301_ppm_err); // sx1301 timer error
+        if (g_sx1301_ppm_err < 0)
+            printf("fast");
+        else if (g_sx1301_ppm_err > 0)
+            printf("slow");
+        printf("-sx1301\n");
+
+        uint32_t reserved_trigcnt_offset = 2120000 + (g_sx1301_ppm_err * 2.12);
+        printf("reserved_trigcnt_offset:%u\n", reserved_trigcnt_offset);
+        trigcnt_pingslot_zero = lgw_trigcnt + reserved_trigcnt_offset;
+
+        lorawan_update_ping_offsets(g_last_beacon_sent_at.tv_sec);
+    
+        lgw_trigcnt_at_next_beacon = lgw_trigcnt + (beacon_period * 1000000);
+
+        BeaconCtx.BeaconTime = g_last_beacon_sent_at.tv_sec;// - beacon_period;
+    } // ..while (!exit_sig && !quit_sig)
+
     MSG("\nINFO: End of downstream thread\n");
 }
 

@@ -5,7 +5,7 @@
         "radio_0": {
             "enable": true,
             "type": "SX1257",
-            "freq": 922600000,
+            "freq": 922400000,
             "rssi_offset": -166.0,
             "tx_enable": true,
             "tx_freq_min":915000000,
@@ -14,60 +14,60 @@
         "radio_1": {
             "enable": true,
             "type": "SX1257",
-            "freq": 923300000,
+            "freq": 923100000,
             "rssi_offset": -166.0,
             "tx_enable": false
         },
         "chan_multiSF_0": {
-            /* Lora MAC channel, 125kHz, all SF, 922.2 MHz */
+            /* Lora MAC channel, 125kHz, all SF, 922.0 MHz */
             "enable": true,
             "radio": 0,
             "if": -400000
         },
         "chan_multiSF_1": {
-            /* Lora MAC channel, 125kHz, all SF, 922.4 MHz */
+            /* Lora MAC channel, 125kHz, all SF, 922.2 MHz */
             "enable": true,
             "radio": 0,
             "if": -200000
         },
         "chan_multiSF_2": {
-            /* Lora MAC channel, 125kHz, all SF, 922.6 MHz */
+            /* Lora MAC channel, 125kHz, all SF, 922.4 MHz */
             "enable": true,
             "radio": 0,
             "if": 0
         },
         "chan_multiSF_3": {
-            /* Lora MAC channel, 125kHz, all SF, 922.8 MHz */
+            /* Lora MAC channel, 125kHz, all SF, 922.6 MHz */
             "enable": true,
             "radio": 0,
             "if": 200000
         },
         "chan_multiSF_4": {
-            /* Lora MAC channel, 125kHz, all SF, 923.0 MHz */
+            /* Lora MAC channel, 125kHz, all SF, 922.8 MHz */
             "enable": true,
             "radio": 1,
             "if": -300000
         },
         "chan_multiSF_5": {
-            /* Lora MAC channel, 125kHz, all SF, 923.2 MHz */
+            /* Lora MAC channel, 125kHz, all SF, 923.0 MHz */
             "enable": true,
             "radio": 1,
             "if": -100000
         },
         "chan_multiSF_6": {
-            /* Lora MAC channel, 125kHz, all SF, 923.4 MHz */
+            /* Lora MAC channel, 125kHz, all SF, 923.2 MHz */
             "enable": true,
             "radio": 1,
             "if": 100000
         },
         "chan_multiSF_7": {
-            /* Lora MAC channel, 125kHz, all SF, 903.7 MHz */
+            /* Lora MAC channel, 125kHz, all SF, 923.4 MHz */
             "enable": true,
             "radio": 1,
             "if": 300000
         },
         "chan_Lora_std": {
-            /* Lora MAC channel, 250kHz, SF7, 923.6 MHz */
+            /* Lora MAC channel, 250kHz, SF7, 923.3 MHz */
             "enable": true,
             "radio": 0,
             "if": 300000,
@@ -214,6 +214,11 @@
             "app_session_key":     "2B 7E 15 16 28 AE D2 A6 AB F7 15 88 09 CF 4F 3C"
             },
             {
+            "dev_addr": "0000baad",
+            "network_session_key": "11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF AA",
+            "app_session_key":     "2B 7E 15 16 28 AE D2 A6 AB F7 15 88 09 CF 4F 3C "
+            },
+            {
                 "app_eui":"00 00 00 00 00 00 00 00",
                 "dev_eui":"19 51 34 30 9e 30 6a 37",
                 "app_key":"00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff"
@@ -253,6 +258,6 @@
         /* GPS configuration */
         "gps_tty_path": "/dev/ttyAMA0",
 		"beacon_period":128,
-		"beacon_freq_hz":923300000
+		"beacon_freq_hz":922000000
     }
 }

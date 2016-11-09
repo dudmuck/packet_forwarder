@@ -209,6 +209,16 @@
             "app_session_key":     "9a 75 90 80 40 4b 77 11 fd 5c 9b 35 32 df 24 8d"
             },
             {
+            "dev_addr": "0000f00d",
+            "network_session_key": "2B 7E 15 16 28 AE D2 A6 AB F7 15 88 09 CF 4F 3C",
+            "app_session_key":     "2B 7E 15 16 28 AE D2 A6 AB F7 15 88 09 CF 4F 3C"
+            },
+            {
+            "dev_addr": "0000baad",
+            "network_session_key": "11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF AA",
+            "app_session_key":     "2B 7E 15 16 28 AE D2 A6 AB F7 15 88 09 CF 4F 3C "
+            },
+            {
                 "app_eui":"00 00 00 00 00 00 00 00",
                 "dev_eui":"19 51 34 30 9e 30 6a 37",
                 "app_key":"00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff"
