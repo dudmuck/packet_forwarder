@@ -1,4 +1,7 @@
+#include <pthread.h>
 #include "loragw_hal.h"
+
+extern pthread_mutex_t mx_concent; /* control access to the concentrator */
 
 typedef struct sBeaconContext
 {
@@ -19,10 +22,12 @@ void lorawan_update_ping_offsets(uint64_t beaconTime);
 
 extern uint8_t tx_rf_chain;    // written by sx1301 conf
 extern uint32_t lgw_trigcnt_at_next_beacon;
+extern bool beacon_valid;
 
 extern float g_sx1301_ppm_err;  // from tiny server
 extern uint32_t trigcnt_pingslot_zero;  // from tiny server
-extern struct timespec g_last_beacon_sent_at;  // from tiny server
+//extern struct timespec g_last_beacon_sent_at;  // from tiny server
+
 double difftimespec(struct timespec end, struct timespec beginning);  // from tiny server
 
 /*!

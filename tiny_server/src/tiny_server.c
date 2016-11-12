@@ -45,7 +45,6 @@ Maintainer: Michael Coracin
 #include <arpa/inet.h>      /* IP address conversion stuff */
 #include <netdb.h>          /* gai_strerror */
 
-#include <pthread.h>
 
 #include "trace.h"
 #include "parson.h"
@@ -136,6 +135,11 @@ static struct lgw_tx_gain_lut_s txlut; /* TX gain table */
 static uint32_t tx_freq_min[LGW_RF_CHAIN_NB]; /* lowest frequency supported by TX chain */
 static uint32_t tx_freq_max[LGW_RF_CHAIN_NB]; /* highest frequency supported by TX chain */
 
+static char gps_tty_path[64] = "\0"; /* path of the TTY port GPS is connected on */
+static int gps_tty_fd = -1; /* file descriptor of the GPS TTY port */
+static bool gps_enabled = false; /* is GPS enabled on that gateway ? */
+static bool gps_ref_valid; /* is GPS reference acceptable (ie. not too old) */
+
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE FUNCTIONS DECLARATION ---------------------------------------- */
 
@@ -151,7 +155,7 @@ double difftimespec(struct timespec end, struct timespec beginning);
 
 /* threads */
 void thread_up(void);
-void thread_down(void);
+void thread_gps(void);
 
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE FUNCTIONS DEFINITION ----------------------------------------- */
@@ -552,7 +556,7 @@ static int parse_gateway_configuration(const char * conf_file) {
     JSON_Value *root_val;
     JSON_Object *conf_obj = NULL;
     JSON_Value *val = NULL; /* needed to detect the absence of some fields */
-    //const char *str; /* pointer to sub-strings in the JSON data */
+    const char *str; /* pointer to sub-strings in the JSON data */
     //unsigned long long ull = 0;
 
     /* try to parse JSON */
@@ -594,6 +598,13 @@ static int parse_gateway_configuration(const char * conf_file) {
         fwd_nocrc_pkt = (bool)json_value_get_boolean(val);
     }
     MSG("INFO: packets received with no CRC will%s be forwarded\n", (fwd_nocrc_pkt ? "" : " NOT"));
+
+    /* GPS module TTY path (optional) */
+    str = json_object_get_string(conf_obj, "gps_tty_path");
+    if (str != NULL) {
+        strncpy(gps_tty_path, str, sizeof gps_tty_path);
+        MSG("INFO: GPS serial port path is configured to \"%s\"\n", gps_tty_path);
+    }
 
     /* get reference coordinates */
     val = json_object_get_value(conf_obj, "ref_latitude");
@@ -664,22 +675,68 @@ double difftimespec(struct timespec end, struct timespec beginning) {
     return x;
 }
 
+#if 0
+void thread_test(void)
+{
+    int ret;
+    uint32_t cnt = 0;
+    struct timespec beacon_start_ts, rem;
+    uint32_t lgw_trigcnt;
+
+    if (clock_gettime (CLOCK_MONOTONIC, &beacon_start_ts) == -1)
+        perror ("clock_gettime");
+
+    beacon_start_ts.tv_sec++;
+    beacon_start_ts.tv_nsec = 0;
+
+    while (!exit_sig && !quit_sig)
+    {
+        ret = lgw_get_trigcnt(&lgw_trigcnt);
+        if (ret == LGW_HAL_SUCCESS)
+            printf("cnt:%u, %u\n", ++cnt, lgw_trigcnt);
+        else
+            printf("cnt:%u, FAIL\n", ++cnt);
+
+        ret = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &beacon_start_ts, &rem);
+        beacon_start_ts.tv_sec++;
+    }
+}
+#endif /* #if 0 */
+
 /* -------------------------------------------------------------------------- */
 /* --- MAIN FUNCTION -------------------------------------------------------- */
 
-int main(void)
+int main(int argc, char **argv)
 {
     struct sigaction sigact; /* SIGQUIT&SIGINT&SIGTERM signal handling */
     int i; /* loop variable and temporary variable for return value */
+    int opt;
 
     /* configuration file related */
     char *global_cfg_path= "global_conf.json"; /* contain global (typ. network-wide) configuration */
     char *local_cfg_path = "local_conf.json"; /* contain node specific configuration, overwrite global parameters for parameters that are defined in both */
     char *debug_cfg_path = "debug_conf.json"; /* if present, all other configuration files are ignored */
+    //char cnt_test = 0;
 
     /* threads */
     pthread_t thrid_up;
-    pthread_t thrid_down;
+    pthread_t thrid_gps;
+    //pthread_t thrid_test;
+
+    while ((opt = getopt(argc, argv, "nt:")) != -1) {
+        switch (opt) {
+            case 'n':
+                //cnt_test = 1;
+                break;
+            case 't':
+                //nsecs = atoi(optarg);
+                //tfnd = 1;
+                break;
+            default: /* '?' */
+                break;
+        }
+    }
+
 
     /* variables to get local copies of measurements */
     /* display version informations */
@@ -724,6 +781,20 @@ int main(void)
         exit(EXIT_FAILURE);
     }
 
+    /* Start GPS a.s.a.p., to allow it to lock */
+    if (gps_tty_path[0] != '\0') { /* do not try to open GPS device if no path set */
+        i = lgw_gps_enable(gps_tty_path, "ubx7", 0, &gps_tty_fd); /* HAL only supports u-blox 7 for now */
+        if (i != LGW_GPS_SUCCESS) {
+            printf("WARNING: [main] impossible to open %s for GPS sync (check permissions)\n", gps_tty_path);
+            gps_enabled = false;
+            gps_ref_valid = false;
+        } else {
+            printf("INFO: [main] TTY port %s open for GPS synchronization\n", gps_tty_path);
+            gps_enabled = true;
+            gps_ref_valid = false;
+        }
+    }
+
     /* get timezone info */
     tzset();
 
@@ -745,10 +816,18 @@ int main(void)
         MSG("ERROR: [main] impossible to create upstream thread\n");
         exit(EXIT_FAILURE);
     }
-    i = pthread_create( &thrid_down, NULL, (void * (*)(void *))thread_down, NULL);
-    if (i != 0) {
-        MSG("ERROR: [main] impossible to create downstream thread\n");
-        exit(EXIT_FAILURE);
+    /*if (cnt_test) {
+        i = pthread_create( &thrid_test, NULL, (void * (*)(void *))thread_test, NULL);
+        if (i != 0) {
+            MSG("ERROR: [main] impossible to create downstream thread\n");
+            exit(EXIT_FAILURE);
+        }
+    } else*/ {
+        i = pthread_create( &thrid_gps, NULL, (void * (*)(void *))thread_gps, NULL);
+        if (i != 0) {
+            MSG("ERROR: [main] impossible to create downstream thread\n");
+            exit(EXIT_FAILURE);
+        }
     }
 
     /* configure signal handling */
@@ -767,7 +846,7 @@ int main(void)
 
     /* wait for upstream thread to finish (1 fetch cycle max) */
     pthread_join(thrid_up, NULL);
-    pthread_cancel(thrid_down); /* don't wait for downstream thread */
+    pthread_cancel(thrid_gps); /* don't wait for downstream thread */
 
     /* if an exit signal was received, try to quit properly */
     if (exit_sig) {
@@ -784,6 +863,134 @@ int main(void)
     exit(EXIT_SUCCESS);
 }
 
+uint32_t trigcnt_pingslot_zero;
+struct timespec g_last_beacon_sent_at;
+
+void
+load_beacon(uint32_t seconds, uint32_t trig_tstamp)
+{
+    uint16_t crc0, crc1;
+    struct lgw_pkt_tx_s tx_pkt;
+    uint8_t rfuOffset1 = 0;
+    uint8_t rfuOffset2 = 0;
+
+#if defined( USE_BAND_915 ) || defined( USE_BAND_915_HYBRID )
+    rfuOffset1 = 1;
+    rfuOffset2 = 1;
+#endif
+
+    tx_pkt.size = BEACON_SIZE;
+    
+    tx_pkt.payload[2 + rfuOffset1] = seconds;
+    tx_pkt.payload[3 + rfuOffset1] = seconds >> 8;
+    tx_pkt.payload[4 + rfuOffset1] = seconds >> 16;
+    tx_pkt.payload[5 + rfuOffset1] = seconds >> 24;
+
+    crc0 = BeaconCrc( tx_pkt.payload, 6 + rfuOffset1 );
+    //printf("crc0:%04x to [%d],[%d]\n", crc0, 6+rfuOffset1, 7+rfuOffset1);
+    tx_pkt.payload[6 + rfuOffset1] = crc0;
+    tx_pkt.payload[7 + rfuOffset1] = crc0 >> 8;
+
+    crc1 = BeaconCrc( &tx_pkt.payload[8 + rfuOffset1], 7 + rfuOffset2 );
+    tx_pkt.payload[15 + rfuOffset1 + rfuOffset2] = crc1;
+    tx_pkt.payload[16 + rfuOffset1 + rfuOffset2] = crc1 >> 8;
+
+    tx_pkt.modulation = MOD_LORA;
+    tx_pkt.coderate = CR_LORA_4_5;
+    //not based on RX2: get_rx2_config(&tx_pkt);
+    tx_pkt.bandwidth = BEACON_BW;
+    tx_pkt.datarate = BEACON_SF;
+    tx_pkt.size = BEACON_SIZE;
+    tx_pkt.freq_hz = BEACON_CHANNEL_FREQ();
+    //printf("tx_pkt.freq_hz:%u\n", tx_pkt.freq_hz);
+
+    print_hal_sf(tx_pkt.datarate);
+    print_hal_bw(tx_pkt.bandwidth);
+    printf(" %.1fMHz\n", tx_pkt.freq_hz / 1e6);
+
+    tx_pkt.tx_mode = IMMEDIATE;
+    tx_pkt.rf_chain = tx_rf_chain;
+    tx_pkt.rf_power = 20;   // TODO
+    tx_pkt.invert_pol = false;
+    tx_pkt.preamble = STD_LORA_PREAMB;
+    tx_pkt.no_crc = true;
+    tx_pkt.no_header = true;   // beacon is fixed length
+
+    printf("BEACON: ");
+    if (lgw_send(tx_pkt) == LGW_HAL_ERROR) {
+        printf("lgw_send() failed\n");
+    }
+
+    uint32_t reserved_trigcnt_offset = 2120000 + (g_sx1301_ppm_err * 2.12);
+    trigcnt_pingslot_zero = trig_tstamp + reserved_trigcnt_offset;
+
+    //g_last_beacon_sent_at.tv_sec = seconds;
+
+    lorawan_update_ping_offsets(seconds);
+
+    int error_us = g_sx1301_ppm_err * beacon_period;
+    uint32_t beacon_period_us = beacon_period * 1000000;
+    lgw_trigcnt_at_next_beacon = trig_tstamp + (beacon_period_us - error_us);
+    beacon_valid = true;
+    printf("error_us:%d, beacon_period_us:%u, lgw_trigcnt_at_next_beacon:%u\n", error_us, beacon_period_us, lgw_trigcnt_at_next_beacon );
+
+    BeaconCtx.BeaconTime = seconds - beacon_period;
+}
+
+struct timespec g_utc_time; /* UTC time associated with PPS pulse */
+
+uint32_t prev_tstamp_at_beacon_tx;
+bool first_diff = true;
+uint32_t prev_trig_tstamp;
+void pps_init(uint32_t trig_tstamp)
+{
+    //printf("pps_init(%u)\n", trig_tstamp);
+    prev_trig_tstamp = trig_tstamp;
+    first_diff = true;
+}
+
+void pps(uint32_t trig_tstamp)
+{
+    static bool save_next_tstamp = false;
+    uint8_t beacon_period_mask = beacon_period - 1;
+    static uint32_t tstamp_at_beacon_tx;
+    int million = trig_tstamp - prev_trig_tstamp;
+    int dev = abs(million - 1000000);
+    
+    //printf("million:%d dev:%d\n", million, dev);
+    if (dev > 100) {
+        printf("dev > 100: %d = %d - %d\n", million, trig_tstamp, prev_trig_tstamp);
+        exit(EXIT_FAILURE);
+    } /*else
+        printf("ok %u - %u\n", prev_trig_tstamp, trig_tstamp);*/
+
+    prev_trig_tstamp = trig_tstamp;
+
+    if ((g_utc_time.tv_sec & beacon_period_mask) == beacon_period_mask) {
+        printf("pps utc:%08lx   %u\n", g_utc_time.tv_sec, trig_tstamp);
+        // load beacon packet into transmitter
+        save_next_tstamp = true;
+    } else if (save_next_tstamp) {
+        save_next_tstamp = false;
+        prev_tstamp_at_beacon_tx = tstamp_at_beacon_tx;
+        tstamp_at_beacon_tx = trig_tstamp;
+        printf("tstamp_at_beacon_tx:%u\n",  tstamp_at_beacon_tx);
+        load_beacon(g_utc_time.tv_sec+1, trig_tstamp);
+        if (!first_diff) {
+            uint32_t measured_us = tstamp_at_beacon_tx - prev_tstamp_at_beacon_tx;
+            int trigcnt_error_over_beacon_period = (beacon_period * 1000000) - measured_us;
+            /* ppm_error:
+                    positive = sx1301 is slow
+                    negative = sx1301 is fast
+            */
+            g_sx1301_ppm_err = trigcnt_error_over_beacon_period / (float)beacon_period;
+            printf("measured_us:%u  trigcnt_error:%d, g_sx1301_ppm_err:%f\n", measured_us, trigcnt_error_over_beacon_period, g_sx1301_ppm_err);
+        } else {
+            first_diff = false;
+        }
+    }
+
+}
 
 /* -------------------------------------------------------------------------- */
 /* --- THREAD 1: RECEIVING PACKETS AND FORWARDING THEM ---------------------- */
@@ -795,9 +1002,25 @@ void thread_up(void) {
     struct lgw_pkt_rx_s rxpkt[NB_PKT_MAX]; /* array containing inbound packets + metadata */
     struct lgw_pkt_rx_s *p; /* pointer on a RX packet */
     int nb_pkt;
+    uint32_t first_trig_tstamp = 0; /* concentrator timestamp associated with PPM pulse */
+    uint32_t trig_tstamp = 0; /* concentrator timestamp associated with PPM pulse */
 
     /* report management variable */
     bool send_report = false;
+
+    /* block here until first pps */
+    pthread_mutex_lock(&mx_concent);
+    i = lgw_get_trigcnt(&first_trig_tstamp);
+    pthread_mutex_unlock(&mx_concent);
+    //printf("first_trig_tstamp: %u\n", first_trig_tstamp);
+    do {
+        wait_ms(FETCH_SLEEP_MS);
+        pthread_mutex_lock(&mx_concent);
+        i = lgw_get_trigcnt(&trig_tstamp);
+        pthread_mutex_unlock(&mx_concent);
+    } while (first_trig_tstamp == trig_tstamp);
+    pps_init(trig_tstamp);
+
 
     while (!exit_sig && !quit_sig) {
 
@@ -816,6 +1039,14 @@ void thread_up(void) {
 
         /* wait a short time if no packets, nor status report */
         if ((nb_pkt == 0) && (send_report == false)) {
+            prev_trig_tstamp = trig_tstamp;
+            pthread_mutex_lock(&mx_concent);
+            i = lgw_get_trigcnt(&trig_tstamp);
+            pthread_mutex_unlock(&mx_concent);
+            if (prev_trig_tstamp != trig_tstamp) {
+                pps(trig_tstamp);
+            }
+
             wait_ms(FETCH_SLEEP_MS);
             continue;
         }
@@ -834,156 +1065,39 @@ void thread_up(void) {
 /* -------------------------------------------------------------------------- */
 /* --- THREAD 2: POLLING SERVER AND ENQUEUING PACKETS IN JIT QUEUE ---------- */
 
+float g_sx1301_ppm_err = 0; // sx1301 timestamp error in a single second
 
-//#define BEACON_SIZE     19
-float g_sx1301_ppm_err = 0;
-uint32_t trigcnt_pingslot_zero;
-struct timespec g_last_beacon_sent_at;
-
-void thread_down(void)
+void thread_gps(void)
 {
-    float sx1301_ppm_err = 0, prev_sx1301_ppm_err = 0;
-    uint32_t lgw_trigcnt;
-    struct timespec /*now,*/ rem, beacon_start_ts, pingslot_start_ts, saved_ts;
-    struct timespec beacon_sent_at, prev_beacon_sent_at = { 0 };
-    struct lgw_pkt_tx_s tx_pkt;
-    uint8_t rfuOffset1 = 0;
-    uint8_t rfuOffset2 = 0;
-    double s2b;
-    uint32_t beacon_start_mask = beacon_period-1;
-
-#if defined( USE_BAND_915 ) || defined( USE_BAND_915_HYBRID )
-    rfuOffset1 = 1;
-    rfuOffset2 = 1;
-#endif
-    lgw_get_trigcnt(&lgw_trigcnt);
-    if (clock_gettime (CLOCK_MONOTONIC, &beacon_start_ts) == -1)
-        perror ("clock_gettime");
-
-    BeaconCtx.Cfg.Interval = beacon_period * 1000;
-    BeaconCtx.BeaconTime = 0;
-
-    saved_ts.tv_sec = beacon_start_ts.tv_sec;
-    saved_ts.tv_nsec = beacon_start_ts.tv_nsec;
-    /* establish first beacon start: */
-    beacon_start_ts.tv_sec = (beacon_start_ts.tv_sec | beacon_start_mask) + 1;
-    beacon_start_ts.tv_nsec = 0;
-    s2b = difftimespec(beacon_start_ts, saved_ts);
-    lgw_trigcnt_at_next_beacon = lgw_trigcnt + (s2b * 1000000);
-
-    pingslot_start_ts.tv_sec = beacon_start_ts.tv_sec - beacon_period;
-    pingslot_start_ts.tv_nsec = beacon_start_ts.tv_nsec;
-    /* beacon_reserved: */
-    pingslot_start_ts.tv_sec += 2;
-    pingslot_start_ts.tv_nsec += 120000000;
-    printf("beacon_start_ts.tv_sec:%lu pingslot_start:%lu.%lu\n", beacon_start_ts.tv_sec, pingslot_start_ts.tv_sec, pingslot_start_ts.tv_nsec);
-    
     while (!exit_sig && !quit_sig)
     {
-        uint16_t crc0, crc1;
-        int ret;
+        int i;
+        enum gps_msg latest_msg; /* keep track of latest NMEA message parsed */
+        char serial_buff[128]; /* buffer to receive GPS data */
+        ssize_t nb_char;
 
-        ret = clock_nanosleep(CLOCK_MONOTONIC, TIMER_ABSTIME, &beacon_start_ts, &rem);
-        if (ret == EFAULT) {
-            //hal_run = false;
-            printf("EFAULT\n");
-        } else if (ret == EINTR) {
-            printf("EINTR\n");
-        } else if (ret == EINVAL) {
-            printf("EINVAL\n");
-            printf("dly.tv_nsec:%lu\n", beacon_start_ts.tv_nsec);
-            printf("dly.tv_sec:%lu\n", beacon_start_ts.tv_sec);
-            //hal_run = false;
-        }
-        lgw_get_trigcnt(&lgw_trigcnt);
-
-        tx_pkt.size = BEACON_SIZE;
-        
-        tx_pkt.payload[2 + rfuOffset1] = beacon_start_ts.tv_sec;
-        tx_pkt.payload[3 + rfuOffset1] = beacon_start_ts.tv_sec >> 8;
-        tx_pkt.payload[4 + rfuOffset1] = beacon_start_ts.tv_sec >> 16;
-        tx_pkt.payload[5 + rfuOffset1] = beacon_start_ts.tv_sec >> 24;
-
-        crc0 = BeaconCrc( tx_pkt.payload, 6 + rfuOffset1 );
-        printf("crc0:%04x to [%d],[%d]\n", crc0, 6+rfuOffset1, 7+rfuOffset1);
-        tx_pkt.payload[6 + rfuOffset1] = crc0;
-        tx_pkt.payload[7 + rfuOffset1] = crc0 >> 8;
-
-        crc1 = BeaconCrc( &tx_pkt.payload[8 + rfuOffset1], 7 + rfuOffset2 );
-        tx_pkt.payload[15 + rfuOffset1 + rfuOffset2] = crc1;
-        tx_pkt.payload[16 + rfuOffset1 + rfuOffset2] = crc1 >> 8;
-
-        tx_pkt.modulation = MOD_LORA;
-        tx_pkt.coderate = CR_LORA_4_5;
-        //not based on RX2: get_rx2_config(&tx_pkt);
-        tx_pkt.bandwidth = BEACON_BW;
-        tx_pkt.datarate = BEACON_SF;
-        tx_pkt.size = BEACON_SIZE;
-        tx_pkt.freq_hz = BEACON_CHANNEL_FREQ();
-        //printf("tx_pkt.freq_hz:%u\n", tx_pkt.freq_hz);
-
-        print_hal_sf(tx_pkt.datarate);
-        print_hal_bw(tx_pkt.bandwidth);
-        printf(" %.1fMHz\n", tx_pkt.freq_hz / 1e6);
-
-        tx_pkt.tx_mode = IMMEDIATE;
-        tx_pkt.rf_chain = tx_rf_chain;
-        tx_pkt.rf_power = 20;   // TODO
-        tx_pkt.invert_pol = false;
-        tx_pkt.preamble = STD_LORA_PREAMB;
-        tx_pkt.no_crc = true;
-        tx_pkt.no_header = true;   // beacon is fixed length
-
-        prev_beacon_sent_at.tv_sec = beacon_sent_at.tv_sec;
-        prev_beacon_sent_at.tv_nsec = beacon_sent_at.tv_nsec;
-        if (clock_gettime (CLOCK_MONOTONIC, &beacon_sent_at) == -1)
-            perror ("clock_gettime");
-
-        printf("BEACON: ");
-        if (lgw_send(tx_pkt) == LGW_HAL_ERROR) {
-            printf("lgw_send() failed\n");
+        /* blocking canonical read on serial port */
+        nb_char = read(gps_tty_fd, serial_buff, sizeof(serial_buff)-1);
+        if (nb_char <= 0) {
+            MSG("WARNING: [gps] read() returned value <= 0\n");
+            continue;
+        } else {
+            serial_buff[nb_char] = 0; /* add null terminator, just to be sure */
         }
 
-        printf("tx beacon: ");
-        for (ret = 0; ret < tx_pkt.size; ret++) 
-            printf("%02x ", tx_pkt.payload[ret]);
-        printf(" (%fs)\n", difftimespec(beacon_sent_at, prev_beacon_sent_at ));
+        /* parse the received NMEA */
+        latest_msg = lgw_parse_nmea(serial_buff, sizeof(serial_buff));
 
+        if (latest_msg == NMEA_RMC) { /* trigger sync only on RMC frames */
+            /* get UTC time for synchronization */
+            i = lgw_gps_get(&g_utc_time, NULL, NULL);
+            if (i != LGW_GPS_SUCCESS) {
+                MSG("WARNING: [gps] could not get UTC time from GPS\n");
+                continue;
+            }
+        } 
 
-        g_last_beacon_sent_at.tv_sec = beacon_start_ts.tv_sec;
-        g_last_beacon_sent_at.tv_nsec = beacon_start_ts.tv_nsec;
-        /* set next beacon start */
-        beacon_start_ts.tv_sec += beacon_period;
-        pingslot_start_ts.tv_sec += beacon_period;
-        printf("beacon_start_ts.tv_sec:%lu pingslot_start:%lu.%lu\n", beacon_start_ts.tv_sec, pingslot_start_ts.tv_sec, pingslot_start_ts.tv_nsec);
-
-        int err = lgw_trigcnt_at_next_beacon - lgw_trigcnt;
-        /* negative err: sx1301 fast
-         * positive err: sx1301 slow
-         */
-        prev_sx1301_ppm_err = sx1301_ppm_err;
-        sx1301_ppm_err = err / (float)beacon_period;
-        g_sx1301_ppm_err = (sx1301_ppm_err + prev_sx1301_ppm_err) / 2.0;
-        //printf("lgw_trigcnt_at_next_beacon:%u, lgw_trigcnt:%u diff:%d ppm:%f gpe:%f ", lgw_trigcnt_at_next_beacon, lgw_trigcnt, err, sx1301_ppm_err, g_sx1301_ppm_err); // sx1301 timer error
-        printf("diff:%d ppm:%f gpe:%f ", err, sx1301_ppm_err, g_sx1301_ppm_err); // sx1301 timer error
-        if (g_sx1301_ppm_err < 0)
-            printf("fast");
-        else if (g_sx1301_ppm_err > 0)
-            printf("slow");
-        printf("-sx1301\n");
-
-        uint32_t reserved_trigcnt_offset = 2120000 + (g_sx1301_ppm_err * 2.12);
-        printf("reserved_trigcnt_offset:%u\n", reserved_trigcnt_offset);
-        trigcnt_pingslot_zero = lgw_trigcnt + reserved_trigcnt_offset;
-
-        lorawan_update_ping_offsets(g_last_beacon_sent_at.tv_sec);
-    
-        lgw_trigcnt_at_next_beacon = lgw_trigcnt + (beacon_period * 1000000);
-
-        BeaconCtx.BeaconTime = g_last_beacon_sent_at.tv_sec;// - beacon_period;
-    } // ..while (!exit_sig && !quit_sig)
-
-    MSG("\nINFO: End of downstream thread\n");
+    } // ...while (!exit_sig && !quit_sig)
 }
 
 void print_tx_status(uint8_t tx_status) {

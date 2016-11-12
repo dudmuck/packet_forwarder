@@ -238,12 +238,13 @@ uint32_t networkAddress = 0;  // bits 24..0 of DevAddr, for join accept
 uint8_t tx_rf_chain;    // written by sx1301 conf
 unsigned int join_ignore_count = 0;
 unsigned int current_join_attempt = 0;
-unsigned int devnonce_experation = 600; // in seconds
+time_t devnonce_experation = 600; // in seconds
 #define DEVNONCE_HISTORY_SIZE   20  /* how many devNonce to keep */
 
 uint8_t user_downlink[128];
 int user_downlink_length = -1;
 uint32_t lgw_trigcnt_at_next_beacon;
+bool beacon_valid = false;
 
 uint8_t ping_downlink_port = 2; // non-zero default
 struct lgw_pkt_tx_s ping_tx_pkt;
@@ -386,6 +387,7 @@ void LoRa_GenerateDataFrameIntegrityCode(const uint8_t key[], uint8_t const inpu
 static int
 _send_downlink(struct lgw_pkt_tx_s* tx_pkt, mote_t* mote)
 {
+    int i;
     fhdr_t* fhdr = (fhdr_t*)&tx_pkt->payload[1];
     uint8_t* mic_ptr;
     fhdr->DevAddr = mote->dev_addr; // if different address, then multicast
@@ -406,7 +408,11 @@ _send_downlink(struct lgw_pkt_tx_s* tx_pkt, mote_t* mote)
     tx_pkt->preamble = STD_LORA_PREAMB;
     tx_pkt->no_crc = true;
     tx_pkt->no_header = false;
-    if (lgw_send(*tx_pkt) == LGW_HAL_ERROR) {
+
+    pthread_mutex_lock(&mx_concent);
+    i = lgw_send(*tx_pkt);
+    pthread_mutex_unlock(&mx_concent);
+    if (i == LGW_HAL_ERROR) {
         printf("send_downlink(): lgw_send() failed\n");
         return -1;
     }
@@ -430,7 +436,7 @@ lorawan_update_ping_offsets(uint64_t beaconTime)
                 ping_period,
                 &mote->ping_offset
             );
-            printf("ping offset: %lu, %08x, %u, %u\n", beaconTime, mote->dev_addr, ping_period, mote->ping_offset);
+            printf("ping offset: %llu, %08x, %u, %u\n", beaconTime, mote->dev_addr, ping_period, mote->ping_offset);
         }
         mote_list_ptr = mote_list_ptr->next;
     }
@@ -579,8 +585,15 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf
                 break;
             case MOTE_MAC_BEACON_TIMING_REQ:    // 0x12
                 /* no payload in request */
+                if (!beacon_valid) {
+                    printf("[31mMOTE_MAC_BEACON_TIMING_REQ !beacon_valid0m\n");
+                    break;
+                }
                 diff = (lgw_trigcnt_at_next_beacon - rx_pkt->count_us) / 30000;
                 printf("MOTE_MAC_BEACON_TIMING_REQ slots:%u=%ums ", diff, diff*30);
+                if (diff > BEACON_WINDOW_SLOTS) {
+                    exit(EXIT_FAILURE);
+                }
                 *tx_fopts_ptr++ = SRV_MAC_BEACON_TIMING_ANS;   // 0x12
                 *tx_fopts_ptr++ = diff & 0xff; //lsbyte first byte
                 *tx_fopts_ptr++ = (diff >> 8) & 0xff;
@@ -646,7 +659,7 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
     LoRa_GenerateDataFrameIntegrityCode(mote->network_session_key, rx_pkt->payload, rx_pkt->size-LORA_FRAMEMICBYTES, rx_fhdr->DevAddr, true, rx_fhdr->FCnt, (uint8_t*)&calculated_mic);
     rx_mic = (uint32_t*)&rx_pkt->payload[rx_pkt->size-LORA_FRAMEMICBYTES];
     if (calculated_mic != *rx_mic) {
-        printf("[41mgenMic:%08x, rxMic:%08x\n", calculated_mic, *rx_mic);
+        printf("[31mgenMic:%08x, rxMic:%08x\n", calculated_mic, *rx_mic);
         printf("mic fail[0m\n");
         return;
     }
@@ -793,7 +806,9 @@ void SendJoinComplete(uint16_t deviceNonce, uint8_t firstReceiveWindowDataRateof
     } else if (tx_pkt.modulation == MOD_FSK) {
         printf("gw tx FSK f_dev:%d datarate:%d\n", tx_pkt.f_dev, tx_pkt.datarate);
     }
+    pthread_mutex_lock(&mx_concent);
     int i = lgw_send(tx_pkt);
+    pthread_mutex_unlock(&mx_concent);
     if (i == LGW_HAL_ERROR) {
         printf("SendJoinComplete(): lgw_send() failed\n");
     }
@@ -897,7 +912,16 @@ lorawan_parse_uplink(struct lgw_pkt_rx_s *p)
     struct _mote_list* mote_list_ptr = mote_list;
     mhdr_t *mhdr = (mhdr_t*)&p->payload[0];
     int o;
-    printf("lorawan_parse_uplink(,%d):", p->size);
+    printf("lorawan_parse_uplink(,%d) %u:", p->size, p->count_us);
+
+    if (p->size <= (sizeof(fhdr_t) + LORA_FRAMEMICBYTES)) {
+        printf("too small\n");
+        return;
+    }
+    if (mhdr->bits.major != 0) {
+        printf("unsupported major:%u\n", mhdr->bits.major);
+        return;
+    }
 
     for (o = 0; o < p->size; o++) {
         printf("%02x ", p->payload[o]);
@@ -922,7 +946,7 @@ lorawan_parse_uplink(struct lgw_pkt_rx_s *p)
         }
 
         if (mote_list_ptr == NULL) {
-            printf("mote not in .json:\n");
+            printf("unknown mote:\n");
             printf("AppEUI:");
             for (o = LORA_EUI_LENGTH-1; o >= 0; o--)
                 printf("%02x ", join_req->AppEUI[o]);
@@ -978,6 +1002,8 @@ bool inputAvailable()
 void
 lorawan_kbd_input()
 {
+    uint32_t trig_tstamp;
+
     if (!inputAvailable())
         return;
 
@@ -997,24 +1023,30 @@ lorawan_kbd_input()
         mote_list_ptr = mote_list_ptr->next;
     }
 
-    if (mote == NULL)
+    if (mote == NULL) {
+        printf("no class-B motes\n");
         return; /* no class-B mote existing */
+    }
 
     /* find the pingslot occuring now */
     struct timespec now;
     if (clock_gettime (CLOCK_MONOTONIC, &now) == -1)
         perror ("clock_gettime");
 
-    ping_mote = mote;
-    uint32_t ping_nb = 128 / (1 << ping_mote->ping_slot_info.bits.periodicity);
-    uint32_t ping_period = BEACON_WINDOW_SLOTS / ping_nb;
 
-    double seconds_since_beacon_start = difftimespec(now, g_last_beacon_sent_at);
+    /*double seconds_since_beacon_start = difftimespec(now, g_last_beacon_sent_at);
     printf("seconds_since_beacon_start:%f\n", seconds_since_beacon_start );
     seconds_since_beacon_start -= 2.12; // take out beacon-guard
     uint16_t current_pingslot = seconds_since_beacon_start / 0.03;
+    printf("current_pingslot :%u\n", current_pingslot);*/
+    pthread_mutex_lock(&mx_concent);
+    lgw_get_trigcnt(&trig_tstamp);  // sx1301 time at last pps (up to 33 pingslots ago)
+    pthread_mutex_unlock(&mx_concent);
+    uint32_t us_since_pingslot_zero = trig_tstamp - trigcnt_pingslot_zero;
+    uint16_t current_pingslot = us_since_pingslot_zero / 30000;
     printf("current_pingslot :%u\n", current_pingslot);
 
+    ping_mote = mote;
     ping_tx_pkt.freq_hz = PINGSLOT_CHANNEL_FREQ(0); // TODO use address in idle state
     ping_tx_pkt.bandwidth = data_rates[ping_mote->ping_slot_info.bits.datarate].bw;
     ping_tx_pkt.datarate = data_rates[ping_mote->ping_slot_info.bits.datarate].bps_sf;
@@ -1033,6 +1065,8 @@ lorawan_kbd_input()
 
     *tx_fport_ptr = ping_downlink_port;
 
+    uint32_t ping_nb = 128 / (1 << ping_mote->ping_slot_info.bits.periodicity);
+    uint32_t ping_period = BEACON_WINDOW_SLOTS / ping_nb;
     uint16_t use_pingslot = ping_mote->ping_offset;
     while (use_pingslot < current_pingslot)
         use_pingslot += ping_period;
@@ -1169,7 +1203,7 @@ int parse_lorawan_configuration(const char * conf_file)
 
     JSON_Array* mote_array = json_object_get_array(conf_obj, "motes");
     size_t n_motes = json_array_get_count(mote_array);
-    printf("n_motes:%lu\n", n_motes);
+    printf("n_motes:%u\n", n_motes);
     for (i = 0; i < n_motes; i++) {
         JSON_Object* mote_obj = json_array_get_object (mote_array, i);
 

@@ -45,6 +45,9 @@ LGW_INC += $(LGW_PATH)/inc/loragw_gps.h
 ### Linking options
 
 LIBS := -lloragw -lrt -lpthread -lm
+ifeq ($(CFG_SPI),ftdi) 
+    LIBS += -lmpsse
+endif
 
 ### General build targets
 
