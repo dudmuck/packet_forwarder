@@ -867,7 +867,7 @@ uint32_t trigcnt_pingslot_zero;
 struct timespec g_last_beacon_sent_at;
 
 void
-load_beacon(uint32_t seconds, uint32_t trig_tstamp)
+load_beacon(uint32_t seconds)
 {
     uint16_t crc0, crc1;
     struct lgw_pkt_tx_s tx_pkt;
@@ -897,18 +897,16 @@ load_beacon(uint32_t seconds, uint32_t trig_tstamp)
 
     tx_pkt.modulation = MOD_LORA;
     tx_pkt.coderate = CR_LORA_4_5;
-    //not based on RX2: get_rx2_config(&tx_pkt);
     tx_pkt.bandwidth = BEACON_BW;
     tx_pkt.datarate = BEACON_SF;
     tx_pkt.size = BEACON_SIZE;
     tx_pkt.freq_hz = BEACON_CHANNEL_FREQ();
-    //printf("tx_pkt.freq_hz:%u\n", tx_pkt.freq_hz);
 
     print_hal_sf(tx_pkt.datarate);
     print_hal_bw(tx_pkt.bandwidth);
     printf(" %.1fMHz\n", tx_pkt.freq_hz / 1e6);
 
-    tx_pkt.tx_mode = IMMEDIATE;
+    tx_pkt.tx_mode = ON_GPS;
     tx_pkt.rf_chain = tx_rf_chain;
     tx_pkt.rf_power = 20;   // TODO
     tx_pkt.invert_pol = false;
@@ -920,21 +918,6 @@ load_beacon(uint32_t seconds, uint32_t trig_tstamp)
     if (lgw_send(tx_pkt) == LGW_HAL_ERROR) {
         printf("lgw_send() failed\n");
     }
-
-    uint32_t reserved_trigcnt_offset = 2120000 + (g_sx1301_ppm_err * 2.12);
-    trigcnt_pingslot_zero = trig_tstamp + reserved_trigcnt_offset;
-
-    //g_last_beacon_sent_at.tv_sec = seconds;
-
-    lorawan_update_ping_offsets(seconds);
-
-    int error_us = g_sx1301_ppm_err * beacon_period;
-    uint32_t beacon_period_us = beacon_period * 1000000;
-    lgw_trigcnt_at_next_beacon = trig_tstamp + (beacon_period_us - error_us);
-    beacon_valid = true;
-    printf("error_us:%d, beacon_period_us:%u, lgw_trigcnt_at_next_beacon:%u\n", error_us, beacon_period_us, lgw_trigcnt_at_next_beacon );
-
-    BeaconCtx.BeaconTime = seconds - beacon_period;
 }
 
 struct timespec g_utc_time; /* UTC time associated with PPS pulse */
@@ -942,11 +925,12 @@ struct timespec g_utc_time; /* UTC time associated with PPS pulse */
 uint32_t prev_tstamp_at_beacon_tx;
 bool first_diff = true;
 uint32_t prev_trig_tstamp;
+struct timespec prev_utc_sec;
 void pps_init(uint32_t trig_tstamp)
 {
-    //printf("pps_init(%u)\n", trig_tstamp);
     prev_trig_tstamp = trig_tstamp;
     first_diff = true;
+    prev_utc_sec.tv_sec = g_utc_time.tv_sec;
 }
 
 void pps(uint32_t trig_tstamp)
@@ -956,26 +940,30 @@ void pps(uint32_t trig_tstamp)
     static uint32_t tstamp_at_beacon_tx;
     int million = trig_tstamp - prev_trig_tstamp;
     int dev = abs(million - 1000000);
-    
-    //printf("million:%d dev:%d\n", million, dev);
+
+    if (prev_utc_sec.tv_sec+1 != g_utc_time.tv_sec) {
+        printf("missing second\n");
+        exit(EXIT_FAILURE);
+    }
+    prev_utc_sec.tv_sec = g_utc_time.tv_sec;
+
     if (dev > 100) {
         printf("dev > 100: %d = %d - %d\n", million, trig_tstamp, prev_trig_tstamp);
         exit(EXIT_FAILURE);
-    } /*else
-        printf("ok %u - %u\n", prev_trig_tstamp, trig_tstamp);*/
+    } 
 
     prev_trig_tstamp = trig_tstamp;
 
     if ((g_utc_time.tv_sec & beacon_period_mask) == beacon_period_mask) {
         printf("pps utc:%08lx   %u\n", g_utc_time.tv_sec, trig_tstamp);
         // load beacon packet into transmitter
+        load_beacon(g_utc_time.tv_sec+1);
         save_next_tstamp = true;
     } else if (save_next_tstamp) {
         save_next_tstamp = false;
         prev_tstamp_at_beacon_tx = tstamp_at_beacon_tx;
         tstamp_at_beacon_tx = trig_tstamp;
-        printf("tstamp_at_beacon_tx:%u\n",  tstamp_at_beacon_tx);
-        load_beacon(g_utc_time.tv_sec+1, trig_tstamp);
+        printf("tstamp_at_beacon_tx:%u, predicted:%u\n",  tstamp_at_beacon_tx, lgw_trigcnt_at_next_beacon);
         if (!first_diff) {
             uint32_t measured_us = tstamp_at_beacon_tx - prev_tstamp_at_beacon_tx;
             int trigcnt_error_over_beacon_period = (beacon_period * 1000000) - measured_us;
@@ -985,6 +973,20 @@ void pps(uint32_t trig_tstamp)
             */
             g_sx1301_ppm_err = trigcnt_error_over_beacon_period / (float)beacon_period;
             printf("measured_us:%u  trigcnt_error:%d, g_sx1301_ppm_err:%f\n", measured_us, trigcnt_error_over_beacon_period, g_sx1301_ppm_err);
+
+            uint32_t reserved_trigcnt_offset = 2120000 + (g_sx1301_ppm_err * 2.12);
+            trigcnt_pingslot_zero = trig_tstamp + reserved_trigcnt_offset;
+
+            lorawan_update_ping_offsets(g_utc_time.tv_sec);
+
+            int error_us = g_sx1301_ppm_err * beacon_period;
+            uint32_t beacon_period_us = beacon_period * 1000000;
+            lgw_trigcnt_at_next_beacon = trig_tstamp + (beacon_period_us - error_us);
+            beacon_valid = true;
+            printf("error_us:%d, beacon_period_us:%u, lgw_trigcnt_at_next_beacon:%u\n", error_us, beacon_period_us, lgw_trigcnt_at_next_beacon);
+
+            BeaconCtx.BeaconTime = g_utc_time.tv_sec - beacon_period;
+
         } else {
             first_diff = false;
         }
@@ -1012,7 +1014,6 @@ void thread_up(void) {
     pthread_mutex_lock(&mx_concent);
     i = lgw_get_trigcnt(&first_trig_tstamp);
     pthread_mutex_unlock(&mx_concent);
-    //printf("first_trig_tstamp: %u\n", first_trig_tstamp);
     do {
         wait_ms(FETCH_SLEEP_MS);
         pthread_mutex_lock(&mx_concent);
@@ -1088,7 +1089,7 @@ void thread_gps(void)
         /* parse the received NMEA */
         latest_msg = lgw_parse_nmea(serial_buff, sizeof(serial_buff));
 
-        if (latest_msg == NMEA_RMC) { /* trigger sync only on RMC frames */
+        if (latest_msg == NMEA_RMC || latest_msg == NMEA_GGA ) { 
             /* get UTC time for synchronization */
             i = lgw_gps_get(&g_utc_time, NULL, NULL);
             if (i != LGW_GPS_SUCCESS) {
