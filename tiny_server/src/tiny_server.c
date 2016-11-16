@@ -973,23 +973,22 @@ void pps(uint32_t trig_tstamp)
             */
             g_sx1301_ppm_err = trigcnt_error_over_beacon_period / (float)beacon_period;
             printf("measured_us:%u  trigcnt_error:%d, g_sx1301_ppm_err:%f\n", measured_us, trigcnt_error_over_beacon_period, g_sx1301_ppm_err);
-
-            uint32_t reserved_trigcnt_offset = 2120000 + (g_sx1301_ppm_err * 2.12);
-            trigcnt_pingslot_zero = trig_tstamp + reserved_trigcnt_offset;
-
-            lorawan_update_ping_offsets(g_utc_time.tv_sec);
-
-            int error_us = g_sx1301_ppm_err * beacon_period;
-            uint32_t beacon_period_us = beacon_period * 1000000;
-            lgw_trigcnt_at_next_beacon = trig_tstamp + (beacon_period_us - error_us);
-            beacon_valid = true;
-            printf("error_us:%d, beacon_period_us:%u, lgw_trigcnt_at_next_beacon:%u\n", error_us, beacon_period_us, lgw_trigcnt_at_next_beacon);
-
-            BeaconCtx.BeaconTime = g_utc_time.tv_sec - beacon_period;
-
         } else {
             first_diff = false;
         }
+
+        uint32_t reserved_trigcnt_offset = 2120000 + (g_sx1301_ppm_err * 2.12);
+        trigcnt_pingslot_zero = trig_tstamp + reserved_trigcnt_offset;
+
+        lorawan_update_ping_offsets(g_utc_time.tv_sec);
+
+        int error_us = g_sx1301_ppm_err * beacon_period;
+        uint32_t beacon_period_us = beacon_period * 1000000;
+        lgw_trigcnt_at_next_beacon = trig_tstamp + (beacon_period_us - error_us);
+        beacon_valid = true;
+        printf("error_us:%d, beacon_period_us:%u, lgw_trigcnt_at_next_beacon:%u\n", error_us, beacon_period_us, lgw_trigcnt_at_next_beacon);
+
+        BeaconCtx.BeaconTime = g_utc_time.tv_sec - beacon_period;
     }
 
 }
