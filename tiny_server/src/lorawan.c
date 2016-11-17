@@ -683,6 +683,7 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
         for (rxo = 0; rxo < rxFRMPayload_length; rxo++) {
             printf("%02x ", decrypted[rxo]);
         }
+        printf("\n");
     }
 
     if (tx_fhdr->FCtrl.dlBits.FOptsLen > 0 || rx_mhdr->bits.MType == MTYPE_CONF_UP || user_downlink_length != -1)
