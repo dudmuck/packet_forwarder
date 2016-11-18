@@ -421,6 +421,27 @@ _send_downlink(struct lgw_pkt_tx_s* tx_pkt, mote_t* mote)
 }
 
 void
+lorawan_service_ping()
+{
+    if (ping_tx_pkt.freq_hz == 0)
+        return;
+
+    /* send ping if it had to be postponed */
+    uint16_t use_pingslot = ping_mote->ping_offset;
+    uint32_t ping_offset_us = use_pingslot * 30000;
+    float ping_offset_s = use_pingslot * 0.03;
+    ping_tx_pkt.count_us = trigcnt_pingslot_zero;
+    ping_tx_pkt.count_us += ping_offset_us + (g_sx1301_ppm_err * ping_offset_s);
+    printf("use_pingslot:%u, ping_offset_us:%u, ping_offset_s:%f\n", use_pingslot, ping_offset_us, ping_offset_s);
+    if (_send_downlink(&ping_tx_pkt, ping_mote) == 0) {
+        /* mark as sent */
+        user_downlink_length = -1;
+        ping_tx_pkt.freq_hz = 0;
+    } else
+        printf("_send_downlink() failed\n");
+}
+
+void
 lorawan_update_ping_offsets(uint64_t beaconTime)
 {
     struct _mote_list* mote_list_ptr = mote_list;
@@ -440,23 +461,6 @@ lorawan_update_ping_offsets(uint64_t beaconTime)
         }
         mote_list_ptr = mote_list_ptr->next;
     }
-
-    if (ping_tx_pkt.freq_hz == 0)
-        return;
-
-    /* send ping if it had to be postponed */
-    uint16_t use_pingslot = ping_mote->ping_offset;
-    uint32_t ping_offset_us = use_pingslot * 30000;
-    float ping_offset_s = use_pingslot * 0.03;
-    ping_tx_pkt.count_us = trigcnt_pingslot_zero;
-    ping_tx_pkt.count_us += ping_offset_us + (g_sx1301_ppm_err * ping_offset_s);
-    printf("use_pingslot:%u, ping_offset_us:%u, ping_offset_s:%f\n", use_pingslot, ping_offset_us, ping_offset_s);
-    if (_send_downlink(&ping_tx_pkt, ping_mote) == 0) {
-        /* mark as sent */
-        user_downlink_length = -1;
-        ping_tx_pkt.freq_hz = 0;
-    } else
-        printf("_send_downlink() failed\n");
 }
 
 void BlockExOr(uint8_t const l[], uint8_t const r[], uint8_t out[], uint16_t bytes)
@@ -591,9 +595,6 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf
                 }
                 diff = (lgw_trigcnt_at_next_beacon - rx_pkt->count_us) / 30000;
                 printf("MOTE_MAC_BEACON_TIMING_REQ slots:%u=%ums ", diff, diff*30);
-                if (diff > BEACON_WINDOW_SLOTS) {
-                    exit(EXIT_FAILURE);
-                }
                 *tx_fopts_ptr++ = SRV_MAC_BEACON_TIMING_ANS;   // 0x12
                 *tx_fopts_ptr++ = diff & 0xff; //lsbyte first byte
                 *tx_fopts_ptr++ = (diff >> 8) & 0xff;

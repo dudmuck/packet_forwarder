@@ -923,6 +923,7 @@ load_beacon(uint32_t seconds)
 struct timespec g_utc_time; /* UTC time associated with PPS pulse */
 
 uint32_t prev_tstamp_at_beacon_tx;
+bool send_saved_ping = false;
 bool first_diff = true;
 uint32_t prev_trig_tstamp;
 struct timespec prev_utc_sec;
@@ -989,6 +990,14 @@ void pps(uint32_t trig_tstamp)
         printf("error_us:%d, beacon_period_us:%u, lgw_trigcnt_at_next_beacon:%u\n", error_us, beacon_period_us, lgw_trigcnt_at_next_beacon);
 
         BeaconCtx.BeaconTime = g_utc_time.tv_sec - beacon_period;
+        send_saved_ping = true;
+    } else if (send_saved_ping) {
+        uint8_t status;
+        lgw_status(TX_STATUS, &status);
+        if (status == TX_FREE) {
+            send_saved_ping = false;
+            lorawan_service_ping();
+        }
     }
 
 }
