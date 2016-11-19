@@ -246,6 +246,7 @@ int user_downlink_length = -1;
 uint32_t lgw_trigcnt_at_next_beacon;
 bool beacon_valid = false;
 
+mtype_e ping_dowlink_mtype = MTYPE_UNCONF_DN;
 uint8_t ping_downlink_port = 2; // non-zero default
 struct lgw_pkt_tx_s ping_tx_pkt;
 mote_t* ping_mote = NULL;
@@ -988,6 +989,35 @@ lorawan_parse_uplink(struct lgw_pkt_rx_s *p)
         printf("%02x mtype:%d", p->payload[0], mhdr->bits.MType);
 
 }
+// return: 1=cmd parsed, 0=user payload
+static int cmd_parse(uint8_t const* cmd_buf, unsigned int cmd_buf_len)
+{
+    //printf("%c, len:%d\n", cmd_buf[0], cmd_buf_len);
+    if (cmd_buf_len == 1) {
+        switch (cmd_buf[0]) {
+            case 'C':
+                printf("Confirmed\n");
+                ping_dowlink_mtype = MTYPE_CONF_DN;
+                return 1;   
+            case 'U':
+                printf("Unconfirmed\n");
+                ping_dowlink_mtype = MTYPE_UNCONF_DN;
+                return 1;   
+            case '.':
+                if (ping_dowlink_mtype == MTYPE_UNCONF_DN)
+                    printf("ping_dowlink_mtype:MTYPE_UNCONF_DN\n");
+                else if (ping_dowlink_mtype == MTYPE_CONF_DN)
+                    printf("ping_dowlink_mtype:MTYPE_CONF_DN\n");
+                return 1;   
+            case '?':
+                printf("C       set ping dowlink to Confirmed\n");
+                printf("U       set ping dowlink to Unconfirmed\n");
+                return 1;   
+            default: return 0;
+        }
+    }
+    return 0;
+}
 
 bool inputAvailable()  
 {
@@ -1011,6 +1041,9 @@ lorawan_kbd_input()
 
     user_downlink_length = read(STDIN_FILENO, user_downlink, sizeof(user_downlink));
     printf("user_downlink:%d,%s\n", user_downlink_length, user_downlink);
+
+    if (cmd_parse(user_downlink, user_downlink_length-1))
+        return; // user command, not payload
 
     /* any class-B motes? */
     mote_t* mote = NULL;
@@ -1052,7 +1085,7 @@ lorawan_kbd_input()
     ping_tx_pkt.freq_hz = PINGSLOT_CHANNEL_FREQ(0); // TODO use address in idle state
     ping_tx_pkt.bandwidth = data_rates[ping_mote->ping_slot_info.bits.datarate].bw;
     ping_tx_pkt.datarate = data_rates[ping_mote->ping_slot_info.bits.datarate].bps_sf;
-    ping_tx_pkt.payload[0] = MTYPE_UNCONF_DN << 5; // MHDR
+    ping_tx_pkt.payload[0] = ping_dowlink_mtype << 5; // MHDR
     fhdr_t* tx_fhdr = (fhdr_t*)&ping_tx_pkt.payload[1];
 
     tx_fhdr->FCtrl.octet = 0;
