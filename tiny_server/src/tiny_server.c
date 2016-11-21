@@ -156,6 +156,7 @@ double difftimespec(struct timespec end, struct timespec beginning);
 /* threads */
 void thread_up(void);
 void thread_gps(void);
+bool beacon_guard = false;
 
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE FUNCTIONS DEFINITION ----------------------------------------- */
@@ -864,7 +865,6 @@ int main(int argc, char **argv)
 }
 
 uint32_t trigcnt_pingslot_zero;
-struct timespec g_last_beacon_sent_at;
 
 void
 load_beacon(uint32_t seconds)
@@ -960,6 +960,8 @@ void pps(uint32_t trig_tstamp)
         // load beacon packet into transmitter
         load_beacon(g_utc_time.tv_sec+1);
         save_next_tstamp = true;
+    } else if ((g_utc_time.tv_sec & beacon_period_mask) == (beacon_period_mask-2)) {
+        beacon_guard = true;
     } else if (save_next_tstamp) {
         save_next_tstamp = false;
         prev_tstamp_at_beacon_tx = tstamp_at_beacon_tx;
@@ -998,6 +1000,7 @@ void pps(uint32_t trig_tstamp)
             send_saved_ping = false;
             lorawan_service_ping();
         }
+        beacon_guard = false;
     }
 
 }

@@ -26,8 +26,8 @@ extern bool beacon_valid;
 
 extern float g_sx1301_ppm_err;  // from tiny server
 extern uint32_t trigcnt_pingslot_zero;  // from tiny server
-//extern struct timespec g_last_beacon_sent_at;  // from tiny server
 void lorawan_service_ping(void);
+extern bool beacon_guard;  // from tiny server
 
 double difftimespec(struct timespec end, struct timespec beginning);  // from tiny server
 

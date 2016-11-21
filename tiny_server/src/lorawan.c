@@ -14,6 +14,7 @@
 #include <sys/select.h>
 #include <time.h>   // for struct timespec
 #include <sys/time.h>
+#include <math.h>
 #include "loragw_hal.h"
 #include "lorawan.h"
 #include "aes.h"
@@ -391,6 +392,12 @@ _send_downlink(struct lgw_pkt_tx_s* tx_pkt, mote_t* mote)
     int i;
     fhdr_t* fhdr = (fhdr_t*)&tx_pkt->payload[1];
     uint8_t* mic_ptr;
+
+    if (beacon_guard) {
+        printf("send blocked by beacon_guard\n");
+        return -1;
+    }
+
     fhdr->DevAddr = mote->dev_addr; // if different address, then multicast
     fhdr->FCnt = mote->FCntDown++;
     // tx_pkt->size must have already FRMPayload length or zero
@@ -458,7 +465,15 @@ lorawan_update_ping_offsets(uint64_t beaconTime)
                 ping_period,
                 &mote->ping_offset
             );
-            printf("ping offset: %llu, %08x, %u, %u\n", beaconTime, mote->dev_addr, ping_period, mote->ping_offset);
+#if UINTPTR_MAX == 0xffffffff
+/* 32-bit */
+    printf("ping offset: %llu, %08x, %u, %u\n", beaconTime, mote->dev_addr, ping_period, mote->ping_offset);
+#elif UINTPTR_MAX == 0xffffffffffffffff
+/* 64-bit */
+    printf("ping offset: %lu, %08x, %u, %u\n", beaconTime, mote->dev_addr, ping_period, mote->ping_offset);
+#else
+/* wtf */
+#endif
         }
         mote_list_ptr = mote_list_ptr->next;
     }
@@ -546,10 +561,11 @@ void LoRa_GenerateJoinFrameIntegrityCode(const uint8_t key[], uint8_t const inpu
 static int
 send_downlink_classA(struct lgw_pkt_tx_s* tx_pkt, mote_t* mote, uint32_t rx_count_us)
 {
-    if (dl_rxwin == 1)
+    if (dl_rxwin == 1) {
         tx_pkt->count_us = rx_count_us + RECEIVE_DELAY1_us;
-    else if (dl_rxwin == 2)
+    } else if (dl_rxwin == 2) {
         tx_pkt->count_us = rx_count_us + RECEIVE_DELAY2_us;
+    }
 
     return _send_downlink(tx_pkt, mote);
 }
@@ -573,7 +589,9 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf
 
     while (rx_cmd_buf_idx < rx_cmd_buf_len) {
         switch (rx_cmd_buf[rx_cmd_buf_idx++]) {
-            uint32_t diff;
+            float diff;
+            uint16_t i_diff;
+            //float iptr, frac;
             case MOTE_MAC_LINK_CHECK_REQ:   // 0x02
                 printf("MOTE_MAC_LINK_CHECK_REQ\n");
                 /* no payload in request */
@@ -594,11 +612,13 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf
                     printf("[31mMOTE_MAC_BEACON_TIMING_REQ !beacon_valid0m\n");
                     break;
                 }
-                diff = (lgw_trigcnt_at_next_beacon - rx_pkt->count_us) / 30000;
-                printf("MOTE_MAC_BEACON_TIMING_REQ slots:%u=%ums ", diff, diff*30);
+                diff = (float)(lgw_trigcnt_at_next_beacon - rx_pkt->count_us) / 30000.0;
+                //frac = modff(diff, &iptr);
+                i_diff = (int)floor(diff);
+                printf("MOTE_MAC_BEACON_TIMING_REQ slots:%.1f=%.1fms (int:%u,%u)", diff, diff*30.0, i_diff, i_diff*30);
                 *tx_fopts_ptr++ = SRV_MAC_BEACON_TIMING_ANS;   // 0x12
-                *tx_fopts_ptr++ = diff & 0xff; //lsbyte first byte
-                *tx_fopts_ptr++ = (diff >> 8) & 0xff;
+                *tx_fopts_ptr++ = i_diff & 0xff; //lsbyte first byte
+                *tx_fopts_ptr++ = (i_diff >> 8) & 0xff;
                 *tx_fopts_ptr++ = 0;   // beacon channel index
                 printf("%02x %02x %02x\n", tx_start_fopts_ptr[1], tx_start_fopts_ptr[2], tx_start_fopts_ptr[3]);
                 break;
@@ -1069,11 +1089,6 @@ lorawan_kbd_input()
         perror ("clock_gettime");
 
 
-    /*double seconds_since_beacon_start = difftimespec(now, g_last_beacon_sent_at);
-    printf("seconds_since_beacon_start:%f\n", seconds_since_beacon_start );
-    seconds_since_beacon_start -= 2.12; // take out beacon-guard
-    uint16_t current_pingslot = seconds_since_beacon_start / 0.03;
-    printf("current_pingslot :%u\n", current_pingslot);*/
     pthread_mutex_lock(&mx_concent);
     lgw_get_trigcnt(&trig_tstamp);  // sx1301 time at last pps (up to 33 pingslots ago)
     pthread_mutex_unlock(&mx_concent);
@@ -1237,7 +1252,7 @@ int parse_lorawan_configuration(const char * conf_file)
     }
 
     JSON_Array* mote_array = json_object_get_array(conf_obj, "motes");
-    size_t n_motes = json_array_get_count(mote_array);
+    unsigned int n_motes = json_array_get_count(mote_array);
     printf("n_motes:%u\n", n_motes);
     for (i = 0; i < n_motes; i++) {
         JSON_Object* mote_obj = json_array_get_object (mote_array, i);
