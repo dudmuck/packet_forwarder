@@ -1065,7 +1065,33 @@ void thread_up(void) {
 
         /* serialize Lora packets metadata and payload */
         for (i=0; i < nb_pkt; ++i) {
+			uint8_t sf;
+			unsigned int bw;
+
             p = &rxpkt[i];
+
+			switch (p->datarate) {
+				case DR_LORA_SF7: sf = 7; break;
+				case DR_LORA_SF8: sf = 8; break;
+				case DR_LORA_SF9: sf = 9; break;
+				case DR_LORA_SF10: sf = 10; break;
+				case DR_LORA_SF11: sf = 11; break;
+				case DR_LORA_SF12: sf = 12; break;
+				default: sf = 0; break;
+			}
+
+			switch (p->bandwidth) {
+				case BW_500KHZ: bw = 500; break;
+				case BW_250KHZ: bw = 250; break;
+				case BW_125KHZ: bw = 125; break;
+				case BW_62K5HZ: bw = 62; break;
+				case BW_31K2HZ: bw = 31; break;
+				case BW_15K6HZ: bw = 16; break;
+				case BW_7K8HZ: bw = 8; break;
+				default: bw = 0; break;
+			}
+
+			printf("RX %.2fMHz %+.0fdBm sf%ubw%u ", (float)p->freq_hz / 1000000.0, p->rssi, sf, bw);
 
             lorawan_parse_uplink(p);
         } // ...for (i=0; i < nb_pkt; ++i)
