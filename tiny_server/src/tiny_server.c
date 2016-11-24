@@ -51,7 +51,9 @@ Maintainer: Michael Coracin
 #include "base64.h"
 #include "lorawan.h"
 #include "lorawan_bands.h"
-#include "loragw_gps.h"
+#ifdef ENABLE_CLASS_B
+	#include "loragw_gps.h"
+#endif
 #include "loragw_aux.h"
 #include "loragw_reg.h"
 
@@ -120,8 +122,17 @@ static unsigned stat_interval = DEFAULT_STAT; /* time interval (in sec) at which
 /* hardware access control and correction */
 pthread_mutex_t mx_concent = PTHREAD_MUTEX_INITIALIZER; /* control access to the concentrator */
 
+#ifdef ENABLE_CLASS_B
 /* Reference coordinates, for broadcasting (beacon) */
 static struct coord_s reference_coord;
+
+static char gps_tty_path[64] = "\0"; /* path of the TTY port GPS is connected on */
+static int gps_tty_fd = -1; /* file descriptor of the GPS TTY port */
+static bool gps_enabled = false; /* is GPS enabled on that gateway ? */
+static bool gps_ref_valid; /* is GPS reference acceptable (ie. not too old) */
+
+void thread_gps(void);
+#endif	/* ENABLE_CLASS_B */
 
 /* beacon parameters */
 static uint32_t beacon_period = 0; /* set beaconing period, must be a sub-multiple of 86400, the nb of sec in a day */
@@ -134,11 +145,6 @@ static int8_t antenna_gain = 0;
 static struct lgw_tx_gain_lut_s txlut; /* TX gain table */
 static uint32_t tx_freq_min[LGW_RF_CHAIN_NB]; /* lowest frequency supported by TX chain */
 static uint32_t tx_freq_max[LGW_RF_CHAIN_NB]; /* highest frequency supported by TX chain */
-
-static char gps_tty_path[64] = "\0"; /* path of the TTY port GPS is connected on */
-static int gps_tty_fd = -1; /* file descriptor of the GPS TTY port */
-static bool gps_enabled = false; /* is GPS enabled on that gateway ? */
-static bool gps_ref_valid; /* is GPS reference acceptable (ie. not too old) */
 
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE FUNCTIONS DECLARATION ---------------------------------------- */
@@ -155,7 +161,6 @@ double difftimespec(struct timespec end, struct timespec beginning);
 
 /* threads */
 void thread_up(void);
-void thread_gps(void);
 bool beacon_guard = false;
 
 /* -------------------------------------------------------------------------- */
@@ -557,7 +562,9 @@ static int parse_gateway_configuration(const char * conf_file) {
     JSON_Value *root_val;
     JSON_Object *conf_obj = NULL;
     JSON_Value *val = NULL; /* needed to detect the absence of some fields */
+#ifdef ENABLE_CLASS_B
     const char *str; /* pointer to sub-strings in the JSON data */
+#endif	/* ENABLE_CLASS_B */
     //unsigned long long ull = 0;
 
     /* try to parse JSON */
@@ -600,6 +607,7 @@ static int parse_gateway_configuration(const char * conf_file) {
     }
     MSG("INFO: packets received with no CRC will%s be forwarded\n", (fwd_nocrc_pkt ? "" : " NOT"));
 
+#ifdef ENABLE_CLASS_B
     /* GPS module TTY path (optional) */
     str = json_object_get_string(conf_obj, "gps_tty_path");
     if (str != NULL) {
@@ -623,6 +631,7 @@ static int parse_gateway_configuration(const char * conf_file) {
         reference_coord.alt = (short)json_value_get_number(val);
         MSG("INFO: Reference altitude is configured to %i meters\n", reference_coord.alt);
     }
+#endif	/* ENABLE_CLASS_B */
 
     /* Beacon signal period (optional) */
     val = json_object_get_value(conf_obj, "beacon_period");
@@ -721,7 +730,9 @@ int main(int argc, char **argv)
 
     /* threads */
     pthread_t thrid_up;
+#ifdef ENABLE_CLASS_B
     pthread_t thrid_gps;
+#endif	/* ENABLE_CLASS_B */
     //pthread_t thrid_test;
 
     while ((opt = getopt(argc, argv, "nt:")) != -1) {
@@ -782,6 +793,7 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
 
+#ifdef ENABLE_CLASS_B
     /* Start GPS a.s.a.p., to allow it to lock */
     if (gps_tty_path[0] != '\0') { /* do not try to open GPS device if no path set */
         i = lgw_gps_enable(gps_tty_path, "ubx7", 0, &gps_tty_fd); /* HAL only supports u-blox 7 for now */
@@ -795,6 +807,7 @@ int main(int argc, char **argv)
             gps_ref_valid = false;
         }
     }
+#endif	/* ENABLE_CLASS_B */
 
     /* get timezone info */
     tzset();
@@ -823,13 +836,16 @@ int main(int argc, char **argv)
             MSG("ERROR: [main] impossible to create downstream thread\n");
             exit(EXIT_FAILURE);
         }
-    } else*/ {
+    } else*/
+#ifdef ENABLE_CLASS_B
+	{
         i = pthread_create( &thrid_gps, NULL, (void * (*)(void *))thread_gps, NULL);
         if (i != 0) {
             MSG("ERROR: [main] impossible to create downstream thread\n");
             exit(EXIT_FAILURE);
         }
     }
+#endif	/* ENABLE_CLASS_B */
 
     /* configure signal handling */
     sigemptyset(&sigact.sa_mask);
@@ -847,7 +863,9 @@ int main(int argc, char **argv)
 
     /* wait for upstream thread to finish (1 fetch cycle max) */
     pthread_join(thrid_up, NULL);
+#ifdef ENABLE_CLASS_B
     pthread_cancel(thrid_gps); /* don't wait for downstream thread */
+#endif	/* ENABLE_CLASS_B */
 
     /* if an exit signal was received, try to quit properly */
     if (exit_sig) {
@@ -920,6 +938,7 @@ load_beacon(uint32_t seconds)
     }
 }
 
+#ifdef ENABLE_CLASS_B
 struct timespec g_utc_time; /* UTC time associated with PPS pulse */
 
 uint32_t prev_tstamp_at_beacon_tx;
@@ -927,6 +946,7 @@ bool send_saved_ping = false;
 bool first_diff = true;
 uint32_t prev_trig_tstamp;
 struct timespec prev_utc_sec;
+
 void pps_init(uint32_t trig_tstamp)
 {
     prev_trig_tstamp = trig_tstamp;
@@ -943,8 +963,9 @@ void pps(uint32_t trig_tstamp)
     int dev = abs(million - 1000000);
 
     if (prev_utc_sec.tv_sec+1 != g_utc_time.tv_sec) {
-        printf("missing second\n");
-        exit(EXIT_FAILURE);
+        printf("[31mmissing second[0m\n");
+        //exit(EXIT_FAILURE);
+		return;
     }
     prev_utc_sec.tv_sec = g_utc_time.tv_sec;
 
@@ -1004,6 +1025,7 @@ void pps(uint32_t trig_tstamp)
     }
 
 }
+#endif	/* ENABLE_CLASS_B */
 
 /* -------------------------------------------------------------------------- */
 /* --- THREAD 1: RECEIVING PACKETS AND FORWARDING THEM ---------------------- */
@@ -1015,12 +1037,15 @@ void thread_up(void) {
     struct lgw_pkt_rx_s rxpkt[NB_PKT_MAX]; /* array containing inbound packets + metadata */
     struct lgw_pkt_rx_s *p; /* pointer on a RX packet */
     int nb_pkt;
+#ifdef ENABLE_CLASS_B
     uint32_t first_trig_tstamp = 0; /* concentrator timestamp associated with PPM pulse */
     uint32_t trig_tstamp = 0; /* concentrator timestamp associated with PPM pulse */
+#endif	/* ENABLE_CLASS_B */
 
     /* report management variable */
     bool send_report = false;
 
+#ifdef ENABLE_CLASS_B
     /* block here until first pps */
     pthread_mutex_lock(&mx_concent);
     i = lgw_get_trigcnt(&first_trig_tstamp);
@@ -1032,7 +1057,7 @@ void thread_up(void) {
         pthread_mutex_unlock(&mx_concent);
     } while (first_trig_tstamp == trig_tstamp);
     pps_init(trig_tstamp);
-
+#endif	/* ENABLE_CLASS_B */
 
     while (!exit_sig && !quit_sig) {
 
@@ -1051,6 +1076,7 @@ void thread_up(void) {
 
         /* wait a short time if no packets, nor status report */
         if ((nb_pkt == 0) && (send_report == false)) {
+#ifdef ENABLE_CLASS_B
             prev_trig_tstamp = trig_tstamp;
             pthread_mutex_lock(&mx_concent);
             i = lgw_get_trigcnt(&trig_tstamp);
@@ -1058,6 +1084,7 @@ void thread_up(void) {
             if (prev_trig_tstamp != trig_tstamp) {
                 pps(trig_tstamp);
             }
+#endif	/* ENABLE_CLASS_B */
 
             wait_ms(FETCH_SLEEP_MS);
             continue;
@@ -1103,6 +1130,8 @@ void thread_up(void) {
 /* -------------------------------------------------------------------------- */
 /* --- THREAD 2: POLLING SERVER AND ENQUEUING PACKETS IN JIT QUEUE ---------- */
 
+
+#ifdef ENABLE_CLASS_B
 float g_sx1301_ppm_err = 0; // sx1301 timestamp error in a single second
 
 void thread_gps(void)
@@ -1116,8 +1145,11 @@ void thread_gps(void)
 
         /* blocking canonical read on serial port */
         nb_char = read(gps_tty_fd, serial_buff, sizeof(serial_buff)-1);
-        if (nb_char <= 0) {
-            MSG("WARNING: [gps] read() returned value <= 0\n");
+        if (nb_char < 0) {
+            MSG("WARNING: [gps] read() returned value < 0\n");
+            continue;
+        } else if (nb_char <= 0) {
+            MSG("WARNING: [gps] read() returned value == 0\n");
             continue;
         } else {
             serial_buff[nb_char] = 0; /* add null terminator, just to be sure */
@@ -1137,6 +1169,7 @@ void thread_gps(void)
 
     } // ...while (!exit_sig && !quit_sig)
 }
+#endif	/* ENABLE_CLASS_B */
 
 void print_tx_status(uint8_t tx_status) {
     switch (tx_status) {

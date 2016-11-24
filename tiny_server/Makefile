@@ -25,7 +25,8 @@ AR := $(CROSS_COMPILE)ar
 CFLAGS := -O2 -g -Wall -Wextra -std=c99 -Iinc -I.
 VFLAG := -D VERSION_STRING="\"$(RELEASE_VERSION)\""
 
-CFLAGS += -DCLASS_B
+# remove if only need class-A:
+CFLAGS += -DENABLE_CLASS_B
 
 #CFLAGS += -DUSE_BAND_915
 #CFLAGS += -DUSE_BAND_868

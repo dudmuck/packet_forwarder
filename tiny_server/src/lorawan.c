@@ -81,6 +81,7 @@ typedef enum eLoRaMacMoteCmd
     /*!
      * PingSlotInfoReq
      */
+#ifdef ENABLE_CLASS_B
     MOTE_MAC_PING_SLOT_INFO_REQ      = 0x10,
     /*!
      * PingSlotFreqAns
@@ -94,6 +95,7 @@ typedef enum eLoRaMacMoteCmd
      * BeaconFreqAns
      */
     MOTE_MAC_BEACON_FREQ_ANS         = 0x13,
+#endif	/* ENABLE_CLASS_B */
 }LoRaMacMoteCmd_t;
 
 typedef enum eLoRaMacSrvCmd
@@ -129,6 +131,7 @@ typedef enum eLoRaMacSrvCmd
     /*!
      * PingSlotInfoAns
      */
+#ifdef ENABLE_CLASS_B
     SRV_MAC_PING_SLOT_INFO_ANS       = 0x10,
     /*!
      * PingSlotChannelReq
@@ -142,6 +145,7 @@ typedef enum eLoRaMacSrvCmd
      * BeaconFreqReq
      */
     SRV_MAC_BEACON_FREQ_REQ          = 0x13,
+#endif	/* ENABLE_CLASS_B */
 }LoRaMacSrvCmd_t;
 
 typedef union {
@@ -394,10 +398,12 @@ _send_downlink(struct lgw_pkt_tx_s* tx_pkt, mote_t* mote)
     fhdr_t* fhdr = (fhdr_t*)&tx_pkt->payload[1];
     uint8_t* mic_ptr;
 
+#ifdef ENABLE_CLASS_B
     if (beacon_guard) {
         printf("send blocked by beacon_guard\n");
         return -1;
     }
+#endif	/* ENABLE_CLASS_B */
 
     fhdr->DevAddr = mote->dev_addr; // if different address, then multicast
     fhdr->FCnt = mote->FCntDown++;
@@ -429,6 +435,7 @@ _send_downlink(struct lgw_pkt_tx_s* tx_pkt, mote_t* mote)
     return 0;
 }
 
+#ifdef ENABLE_CLASS_B
 void
 lorawan_service_ping()
 {
@@ -479,6 +486,7 @@ lorawan_update_ping_offsets(uint64_t beaconTime)
         mote_list_ptr = mote_list_ptr->next;
     }
 }
+#endif	/* ENABLE_CLASS_B */
 
 void BlockExOr(uint8_t const l[], uint8_t const r[], uint8_t out[], uint16_t bytes)
 {
@@ -591,9 +599,10 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf
 
     while (rx_cmd_buf_idx < rx_cmd_buf_len) {
         switch (rx_cmd_buf[rx_cmd_buf_idx++]) {
+#ifdef ENABLE_CLASS_B
             float diff;
             uint16_t i_diff;
-            //float iptr, frac;
+#endif	/* ENABLE_CLASS_B */
             case MOTE_MAC_LINK_CHECK_REQ:   // 0x02
                 printf("MOTE_MAC_LINK_CHECK_REQ\n");
                 /* no payload in request */
@@ -601,6 +610,7 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf
                 *tx_fopts_ptr++ = 20;  // db margin above noise floor
                 *tx_fopts_ptr++ = 1;  // gateway count
                 break;
+#ifdef ENABLE_CLASS_B
             case MOTE_MAC_PING_SLOT_INFO_REQ:   // 0x10
                 printf("MOTE_MAC_PING_SLOT_INFO_REQ\n");
                  // one payload byte: periocity and datarate
@@ -615,7 +625,6 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf
                     break;
                 }
                 diff = (float)(lgw_trigcnt_at_next_beacon - rx_pkt->count_us) / 30000.0;
-                //frac = modff(diff, &iptr);
                 i_diff = (int)floor(diff);
                 printf("MOTE_MAC_BEACON_TIMING_REQ slots:%.1f=%.1fms (int:%u,%u)", diff, diff*30.0, i_diff, i_diff*30);
                 *tx_fopts_ptr++ = SRV_MAC_BEACON_TIMING_ANS;   // 0x12
@@ -624,6 +633,7 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf
                 *tx_fopts_ptr++ = 0;   // beacon channel index
                 printf("%02x %02x %02x\n", tx_start_fopts_ptr[1], tx_start_fopts_ptr[2], tx_start_fopts_ptr[3]);
                 break;
+#endif	/* ENABLE_CLASS_B */
             default:
                 printf("[41mTODO mac cmd %02x[0m\n", rx_cmd_buf[0]);
                 return;
@@ -631,6 +641,11 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf
     } // .. while have mac comannds
 
     tx_fhdr->FCtrl.dlBits.FOptsLen = tx_fopts_ptr - tx_start_fopts_ptr;
+
+#ifndef ENABLE_CLASS_B
+	(void)rx_pkt;
+	(void)mote;
+#endif	/* ENABLE_CLASS_B */
 }
 
 void print_hal_bw(uint8_t bandwidth)
@@ -1072,7 +1087,9 @@ bool inputAvailable()
 void
 lorawan_kbd_input()
 {
+#ifdef ENABLE_CLASS_B
     uint32_t trig_tstamp;
+#endif	/* ENABLE_CLASS_B */
 
     if (!inputAvailable())
         return;
@@ -1083,6 +1100,7 @@ lorawan_kbd_input()
     if (cmd_parse(user_downlink, user_downlink_length-1))
         return; // user command, not payload
 
+#ifdef ENABLE_CLASS_B
     /* any class-B motes? */
     mote_t* mote = NULL;
     struct _mote_list* mote_list_ptr = mote_list;
@@ -1158,6 +1176,7 @@ lorawan_kbd_input()
         ping_tx_pkt.freq_hz = 0;
     } else
         printf("_send_downlink() failed\n");
+#endif	/* ENABLE_CLASS_B */
 }
 
 

@@ -18,16 +18,19 @@ void print_hal_sf(uint8_t datarate);
 void lorawan_kbd_input(void);
 void lorawan_parse_uplink(struct lgw_pkt_rx_s *p);
 int parse_lorawan_configuration(const char * conf_file);
-void lorawan_update_ping_offsets(uint64_t beaconTime);
 
 extern uint8_t tx_rf_chain;    // written by sx1301 conf
+
+#ifdef ENABLE_CLASS_B
+void lorawan_update_ping_offsets(uint64_t beaconTime);
 extern uint32_t lgw_trigcnt_at_next_beacon;
 extern bool beacon_valid;
-
 extern float g_sx1301_ppm_err;  // from tiny server
 extern uint32_t trigcnt_pingslot_zero;  // from tiny server
 void lorawan_service_ping(void);
 extern bool beacon_guard;  // from tiny server
+#endif	/* ENABLE_CLASS_B */
+
 
 double difftimespec(struct timespec end, struct timespec beginning);  // from tiny server
 
