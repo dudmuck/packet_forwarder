@@ -29,6 +29,7 @@ extern float g_sx1301_ppm_err;  // from tiny server
 extern uint32_t trigcnt_pingslot_zero;  // from tiny server
 void lorawan_service_ping(void);
 extern bool beacon_guard;  // from tiny server
+extern int skip_beacon_cnt;
 #endif	/* ENABLE_CLASS_B */
 
 

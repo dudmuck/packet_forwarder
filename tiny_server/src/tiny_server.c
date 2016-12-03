@@ -52,7 +52,7 @@ Maintainer: Michael Coracin
 #include "lorawan.h"
 #include "lorawan_bands.h"
 #ifdef ENABLE_CLASS_B
-	#include "loragw_gps.h"
+    #include "loragw_gps.h"
 #endif
 #include "loragw_aux.h"
 #include "loragw_reg.h"
@@ -132,7 +132,7 @@ static bool gps_enabled = false; /* is GPS enabled on that gateway ? */
 static bool gps_ref_valid; /* is GPS reference acceptable (ie. not too old) */
 
 void thread_gps(void);
-#endif	/* ENABLE_CLASS_B */
+#endif    /* ENABLE_CLASS_B */
 
 /* beacon parameters */
 static uint32_t beacon_period = 0; /* set beaconing period, must be a sub-multiple of 86400, the nb of sec in a day */
@@ -564,7 +564,7 @@ static int parse_gateway_configuration(const char * conf_file) {
     JSON_Value *val = NULL; /* needed to detect the absence of some fields */
 #ifdef ENABLE_CLASS_B
     const char *str; /* pointer to sub-strings in the JSON data */
-#endif	/* ENABLE_CLASS_B */
+#endif    /* ENABLE_CLASS_B */
     //unsigned long long ull = 0;
 
     /* try to parse JSON */
@@ -631,7 +631,7 @@ static int parse_gateway_configuration(const char * conf_file) {
         reference_coord.alt = (short)json_value_get_number(val);
         MSG("INFO: Reference altitude is configured to %i meters\n", reference_coord.alt);
     }
-#endif	/* ENABLE_CLASS_B */
+#endif    /* ENABLE_CLASS_B */
 
     /* Beacon signal period (optional) */
     val = json_object_get_value(conf_obj, "beacon_period");
@@ -732,7 +732,7 @@ int main(int argc, char **argv)
     pthread_t thrid_up;
 #ifdef ENABLE_CLASS_B
     pthread_t thrid_gps;
-#endif	/* ENABLE_CLASS_B */
+#endif    /* ENABLE_CLASS_B */
     //pthread_t thrid_test;
 
     while ((opt = getopt(argc, argv, "nt:")) != -1) {
@@ -807,7 +807,7 @@ int main(int argc, char **argv)
             gps_ref_valid = false;
         }
     }
-#endif	/* ENABLE_CLASS_B */
+#endif    /* ENABLE_CLASS_B */
 
     /* get timezone info */
     tzset();
@@ -838,14 +838,14 @@ int main(int argc, char **argv)
         }
     } else*/
 #ifdef ENABLE_CLASS_B
-	{
+    {
         i = pthread_create( &thrid_gps, NULL, (void * (*)(void *))thread_gps, NULL);
         if (i != 0) {
             MSG("ERROR: [main] impossible to create downstream thread\n");
             exit(EXIT_FAILURE);
         }
     }
-#endif	/* ENABLE_CLASS_B */
+#endif    /* ENABLE_CLASS_B */
 
     /* configure signal handling */
     sigemptyset(&sigact.sa_mask);
@@ -865,7 +865,7 @@ int main(int argc, char **argv)
     pthread_join(thrid_up, NULL);
 #ifdef ENABLE_CLASS_B
     pthread_cancel(thrid_gps); /* don't wait for downstream thread */
-#endif	/* ENABLE_CLASS_B */
+#endif    /* ENABLE_CLASS_B */
 
     /* if an exit signal was received, try to quit properly */
     if (exit_sig) {
@@ -918,7 +918,14 @@ load_beacon(uint32_t seconds)
     tx_pkt.bandwidth = BEACON_BW;
     tx_pkt.datarate = BEACON_SF;
     tx_pkt.size = BEACON_SIZE;
-    tx_pkt.freq_hz = BEACON_CHANNEL_FREQ();
+    if (skip_beacon_cnt > 0) {
+        /* cause beacon to fail by sending on wrong frequency */
+        printf("skip_beacon_cnt:%d\n", skip_beacon_cnt);
+        skip_beacon_cnt--;
+        tx_pkt.freq_hz = BEACON_CHANNEL_FREQ() + 500000;
+    } else {
+        tx_pkt.freq_hz = BEACON_CHANNEL_FREQ();
+    }
 
     print_hal_sf(tx_pkt.datarate);
     print_hal_bw(tx_pkt.bandwidth);
@@ -928,7 +935,7 @@ load_beacon(uint32_t seconds)
     tx_pkt.rf_chain = tx_rf_chain;
     tx_pkt.rf_power = 20;   // TODO
     tx_pkt.invert_pol = false;
-    tx_pkt.preamble = STD_LORA_PREAMB;
+    tx_pkt.preamble = 10;
     tx_pkt.no_crc = true;
     tx_pkt.no_header = true;   // beacon is fixed length
 
@@ -965,7 +972,7 @@ void pps(uint32_t trig_tstamp)
     if (prev_utc_sec.tv_sec+1 != g_utc_time.tv_sec) {
         printf("[31mmissing second[0m\n");
         //exit(EXIT_FAILURE);
-		return;
+        return;
     }
     prev_utc_sec.tv_sec = g_utc_time.tv_sec;
 
@@ -978,7 +985,6 @@ void pps(uint32_t trig_tstamp)
 
     if ((g_utc_time.tv_sec & beacon_period_mask) == beacon_period_mask) {
         printf("pps utc:%08lx   %u\n", g_utc_time.tv_sec, trig_tstamp);
-        // load beacon packet into transmitter
         load_beacon(g_utc_time.tv_sec+1);
         save_next_tstamp = true;
     } else if ((g_utc_time.tv_sec & beacon_period_mask) == (beacon_period_mask-2)) {
@@ -1025,7 +1031,7 @@ void pps(uint32_t trig_tstamp)
     }
 
 }
-#endif	/* ENABLE_CLASS_B */
+#endif    /* ENABLE_CLASS_B */
 
 /* -------------------------------------------------------------------------- */
 /* --- THREAD 1: RECEIVING PACKETS AND FORWARDING THEM ---------------------- */
@@ -1040,7 +1046,7 @@ void thread_up(void) {
 #ifdef ENABLE_CLASS_B
     uint32_t first_trig_tstamp = 0; /* concentrator timestamp associated with PPM pulse */
     uint32_t trig_tstamp = 0; /* concentrator timestamp associated with PPM pulse */
-#endif	/* ENABLE_CLASS_B */
+#endif    /* ENABLE_CLASS_B */
 
     /* report management variable */
     bool send_report = false;
@@ -1057,7 +1063,7 @@ void thread_up(void) {
         pthread_mutex_unlock(&mx_concent);
     } while (first_trig_tstamp == trig_tstamp);
     pps_init(trig_tstamp);
-#endif	/* ENABLE_CLASS_B */
+#endif    /* ENABLE_CLASS_B */
 
     while (!exit_sig && !quit_sig) {
 
@@ -1084,7 +1090,7 @@ void thread_up(void) {
             if (prev_trig_tstamp != trig_tstamp) {
                 pps(trig_tstamp);
             }
-#endif	/* ENABLE_CLASS_B */
+#endif    /* ENABLE_CLASS_B */
 
             wait_ms(FETCH_SLEEP_MS);
             continue;
@@ -1092,33 +1098,33 @@ void thread_up(void) {
 
         /* serialize Lora packets metadata and payload */
         for (i=0; i < nb_pkt; ++i) {
-			uint8_t sf;
-			unsigned int bw;
+        uint8_t sf;
+            unsigned int bw;
 
             p = &rxpkt[i];
 
-			switch (p->datarate) {
-				case DR_LORA_SF7: sf = 7; break;
-				case DR_LORA_SF8: sf = 8; break;
-				case DR_LORA_SF9: sf = 9; break;
-				case DR_LORA_SF10: sf = 10; break;
-				case DR_LORA_SF11: sf = 11; break;
-				case DR_LORA_SF12: sf = 12; break;
-				default: sf = 0; break;
-			}
+            switch (p->datarate) {
+                case DR_LORA_SF7: sf = 7; break;
+                case DR_LORA_SF8: sf = 8; break;
+                case DR_LORA_SF9: sf = 9; break;
+                case DR_LORA_SF10: sf = 10; break;
+                case DR_LORA_SF11: sf = 11; break;
+                case DR_LORA_SF12: sf = 12; break;
+                default: sf = 0; break;
+            }
 
-			switch (p->bandwidth) {
-				case BW_500KHZ: bw = 500; break;
-				case BW_250KHZ: bw = 250; break;
-				case BW_125KHZ: bw = 125; break;
-				case BW_62K5HZ: bw = 62; break;
-				case BW_31K2HZ: bw = 31; break;
-				case BW_15K6HZ: bw = 16; break;
-				case BW_7K8HZ: bw = 8; break;
-				default: bw = 0; break;
-			}
+            switch (p->bandwidth) {
+                case BW_500KHZ: bw = 500; break;
+                case BW_250KHZ: bw = 250; break;
+                case BW_125KHZ: bw = 125; break;
+                case BW_62K5HZ: bw = 62; break;
+                case BW_31K2HZ: bw = 31; break;
+                case BW_15K6HZ: bw = 16; break;
+                case BW_7K8HZ: bw = 8; break;
+                default: bw = 0; break;
+            }
 
-			printf("RX %.2fMHz %+.0fdBm sf%ubw%u ", (float)p->freq_hz / 1000000.0, p->rssi, sf, bw);
+            printf("RX %.2fMHz %+.0fdBm sf%ubw%u ", (float)p->freq_hz / 1000000.0, p->rssi, sf, bw);
 
             lorawan_parse_uplink(p);
         } // ...for (i=0; i < nb_pkt; ++i)
@@ -1169,7 +1175,7 @@ void thread_gps(void)
 
     } // ...while (!exit_sig && !quit_sig)
 }
-#endif	/* ENABLE_CLASS_B */
+#endif    /* ENABLE_CLASS_B */
 
 void print_tx_status(uint8_t tx_status) {
     switch (tx_status) {

@@ -23,7 +23,7 @@
 #include "trace.h"
 #include "lorawan_bands.h"
 
-#define DEFAULT_DOWNLINK_PORT		2
+#define DEFAULT_DOWNLINK_PORT       2
 
 #define JOIN_ACCEPT_DELAY1_us                          5000000
 #define JOIN_ACCEPT_DELAY2_us                          6000000
@@ -95,7 +95,7 @@ typedef enum eLoRaMacMoteCmd
      * BeaconFreqAns
      */
     MOTE_MAC_BEACON_FREQ_ANS         = 0x13,
-#endif	/* ENABLE_CLASS_B */
+#endif  /* ENABLE_CLASS_B */
 }LoRaMacMoteCmd_t;
 
 typedef enum eLoRaMacSrvCmd
@@ -145,7 +145,7 @@ typedef enum eLoRaMacSrvCmd
      * BeaconFreqReq
      */
     SRV_MAC_BEACON_FREQ_REQ          = 0x13,
-#endif	/* ENABLE_CLASS_B */
+#endif  /* ENABLE_CLASS_B */
 }LoRaMacSrvCmd_t;
 
 typedef union {
@@ -252,12 +252,15 @@ int user_downlink_length = -1;
 uint32_t lgw_trigcnt_at_next_beacon;
 bool beacon_valid = false;
 
-mtype_e ping_dowlink_mtype = MTYPE_UNCONF_DN;
+mtype_e user_dowlink_mtype = MTYPE_UNCONF_DN;
 uint8_t ping_downlink_port = 2; // non-zero default
 struct lgw_pkt_tx_s ping_tx_pkt;
 mote_t* ping_mote = NULL;
 
+#ifdef ENABLE_CLASS_B
 BeaconContext_t BeaconCtx;
+int skip_beacon_cnt = 0;
+#endif  /* ENABLE_CLASS_B */
 
 void print_octets(char const* label, uint8_t const* buf, uint8_t buf_len)
 {
@@ -403,7 +406,7 @@ _send_downlink(struct lgw_pkt_tx_s* tx_pkt, mote_t* mote)
         printf("send blocked by beacon_guard\n");
         return -1;
     }
-#endif	/* ENABLE_CLASS_B */
+#endif  /* ENABLE_CLASS_B */
 
     fhdr->DevAddr = mote->dev_addr; // if different address, then multicast
     fhdr->FCnt = mote->FCntDown++;
@@ -486,7 +489,7 @@ lorawan_update_ping_offsets(uint64_t beaconTime)
         mote_list_ptr = mote_list_ptr->next;
     }
 }
-#endif	/* ENABLE_CLASS_B */
+#endif  /* ENABLE_CLASS_B */
 
 void BlockExOr(uint8_t const l[], uint8_t const r[], uint8_t out[], uint16_t bytes)
 {
@@ -570,7 +573,7 @@ void LoRa_GenerateJoinFrameIntegrityCode(const uint8_t key[], uint8_t const inpu
 static int
 send_downlink_classA(struct lgw_pkt_tx_s* tx_pkt, mote_t* mote, uint32_t rx_count_us)
 {
-	printf(" send_downlink_classA rx%d\n", dl_rxwin);
+    printf(" send_downlink_classA rx%d\n", dl_rxwin);
     if (dl_rxwin == 1) {
         tx_pkt->count_us = rx_count_us + RECEIVE_DELAY1_us;
     } else if (dl_rxwin == 2) {
@@ -602,7 +605,7 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf
 #ifdef ENABLE_CLASS_B
             float diff;
             uint16_t i_diff;
-#endif	/* ENABLE_CLASS_B */
+#endif  /* ENABLE_CLASS_B */
             case MOTE_MAC_LINK_CHECK_REQ:   // 0x02
                 printf("MOTE_MAC_LINK_CHECK_REQ\n");
                 /* no payload in request */
@@ -633,9 +636,9 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf
                 *tx_fopts_ptr++ = 0;   // beacon channel index
                 printf("%02x %02x %02x\n", tx_start_fopts_ptr[1], tx_start_fopts_ptr[2], tx_start_fopts_ptr[3]);
                 break;
-#endif	/* ENABLE_CLASS_B */
+#endif  /* ENABLE_CLASS_B */
             default:
-                printf("[41mTODO mac cmd %02x[0m\n", rx_cmd_buf[0]);
+                printf("[31mTODO mac cmd %02x[0m\n", rx_cmd_buf[0]);
                 return;
         } // ..switch (<mac_command>)
     } // .. while have mac comannds
@@ -643,9 +646,9 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf
     tx_fhdr->FCtrl.dlBits.FOptsLen = tx_fopts_ptr - tx_start_fopts_ptr;
 
 #ifndef ENABLE_CLASS_B
-	(void)rx_pkt;
-	(void)mote;
-#endif	/* ENABLE_CLASS_B */
+    (void)rx_pkt;
+    (void)mote;
+#endif  /* ENABLE_CLASS_B */
 }
 
 void print_hal_bw(uint8_t bandwidth)
@@ -688,17 +691,17 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
     uint8_t* rx_fport_ptr = NULL;
 
     printf("rxAck:%u fCtrl:0x%02x rxofs:%d ", rx_fhdr->FCtrl.ulBits.ACK, rx_fhdr->FCtrl.octet, rxofs);
-	if ((rx_pkt->size - LORA_FRAMEMICBYTES) > rxofs) {
-    	rxFRMPayload_length = (rx_pkt->size - LORA_FRAMEMICBYTES) - (rxofs + 1);
-    	rxFRMPayload = &rx_pkt->payload[rxofs+1];
-    	rx_fport_ptr = &rx_pkt->payload[rxofs];
-    	printf("rx_fport:%d rxFRMPayload_length:%d\n", *rx_fport_ptr, rxFRMPayload_length);
-    	for (rxofs = 0; rxofs < rxFRMPayload_length; rxofs++) {
-        	printf("%02x ", rxFRMPayload[rxofs]);
-    	}
-    	printf("\n");
-	} else
-		printf("no-payload\n");
+    if ((rx_pkt->size - LORA_FRAMEMICBYTES) > rxofs) {
+        rxFRMPayload_length = (rx_pkt->size - LORA_FRAMEMICBYTES) - (rxofs + 1);
+        rxFRMPayload = &rx_pkt->payload[rxofs+1];
+        rx_fport_ptr = &rx_pkt->payload[rxofs];
+        printf("rx_fport:%d rxFRMPayload_length:%d\n", *rx_fport_ptr, rxFRMPayload_length);
+        for (rxofs = 0; rxofs < rxFRMPayload_length; rxofs++) {
+            printf("%02x ", rxFRMPayload[rxofs]);
+        }
+        printf("\n");
+    } else
+        printf("no-payload\n");
 
     tx_pkt.size = 0;
 
@@ -725,26 +728,25 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
             rxofs = sizeof(mhdr_t) + sizeof(fhdr_t);
             parse_mac_command(rx_pkt, mote, &rx_pkt->payload[rxofs], rx_fhdr->FCtrl.ulBits.FOptsLen, &tx_pkt);
         }
-		if (rxFRMPayload != NULL) {
-        	LoRa_EncryptPayload(mote->app_session_key, rxFRMPayload, rxFRMPayload_length, rx_fhdr->DevAddr, true, rx_fhdr->FCnt, decrypted);
-        	printf("app-decrypt:");
-        	for (rxofs = 0; rxofs < rxFRMPayload_length; rxofs++) {
-            	printf("%02x ", decrypted[rxofs]);
-        	}
-        	printf("\n");
-		}
+        if (rxFRMPayload != NULL) {
+            LoRa_EncryptPayload(mote->app_session_key, rxFRMPayload, rxFRMPayload_length, rx_fhdr->DevAddr, true, rx_fhdr->FCnt, decrypted);
+            printf("app-decrypt:");
+            for (rxofs = 0; rxofs < rxFRMPayload_length; rxofs++) {
+                printf("%02x ", decrypted[rxofs]);
+            }
+            printf("\n");
+        }
     }
 
     if (tx_fhdr->FCtrl.dlBits.FOptsLen > 0 ||
-		(rx_mhdr->bits.MType == MTYPE_CONF_UP && !rx_fhdr->FCtrl.ulBits.ACK) ||
-		user_downlink_length != -1)
+        (rx_mhdr->bits.MType == MTYPE_CONF_UP && !rx_fhdr->FCtrl.ulBits.ACK) ||
+        user_downlink_length != -1)
     {
         /* something to send via downlink */
-        if (rx_mhdr->bits.MType == MTYPE_CONF_UP) {
-            tx_pkt.payload[0] = MTYPE_CONF_DN << 5; // MHDR
+        if (rx_mhdr->bits.MType == MTYPE_CONF_UP)
             tx_fhdr->FCtrl.dlBits.ACK = 1;
-        } else if (rx_mhdr->bits.MType == MTYPE_UNCONF_UP)
-            tx_pkt.payload[0] = MTYPE_UNCONF_DN << 5; // MHDR
+        else
+            tx_fhdr->FCtrl.dlBits.ACK = 0;
 
         if (user_downlink_length != -1) {
             /* add user payload */
@@ -752,12 +754,17 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
             uint8_t* tx_fport_ptr = &tx_pkt.payload[txo];
             uint8_t* txFRMPayload = &tx_pkt.payload[txo+1];
             LoRa_EncryptPayload(mote->app_session_key, user_downlink, user_downlink_length, mote->dev_addr, false, mote->FCntDown, txFRMPayload);
-			if (rx_fport_ptr != NULL)
-            	*tx_fport_ptr = *rx_fport_ptr;
-			else
-            	*tx_fport_ptr = DEFAULT_DOWNLINK_PORT;
+            if (rx_fport_ptr != NULL)
+                *tx_fport_ptr = *rx_fport_ptr;
+            else
+                *tx_fport_ptr = DEFAULT_DOWNLINK_PORT;
 
             tx_pkt.size = tx_fhdr->FCtrl.dlBits.FOptsLen + user_downlink_length + 1; // +1 for fport
+            tx_pkt.payload[0] = user_dowlink_mtype << 5; // MHDR
+        } else {
+            /* downlink not triggered by user_downlink */
+            /* downlink triggered by FOpotsLen > 0 or conf_uplink */
+            tx_pkt.payload[0] = MTYPE_UNCONF_DN << 5; // MHDR
         }
 
         band_conv(rx_pkt, &tx_pkt);
@@ -979,10 +986,11 @@ lorawan_parse_uplink(struct lgw_pkt_rx_s *p)
         return;
     }
 
+/*    raw-rf payload print:
     for (o = 0; o < p->size; o++) {
         printf("%02x ", p->payload[o]);
     }
-    printf("\n");
+    printf("\n");*/
 
     // FHDR: devAddr, FCtrl, FCnt, FOpts
     // FHDR:     4     1      2     n
@@ -1050,24 +1058,29 @@ static int cmd_parse(uint8_t const* cmd_buf, unsigned int cmd_buf_len)
         switch (cmd_buf[0]) {
             case 'C':
                 printf("Confirmed\n");
-                ping_dowlink_mtype = MTYPE_CONF_DN;
-                return 1;   
+                user_dowlink_mtype = MTYPE_CONF_DN;
+                return 1;
             case 'U':
                 printf("Unconfirmed\n");
-                ping_dowlink_mtype = MTYPE_UNCONF_DN;
-                return 1;   
+                user_dowlink_mtype = MTYPE_UNCONF_DN;
+                return 1;
             case '.':
-                if (ping_dowlink_mtype == MTYPE_UNCONF_DN)
-                    printf("ping_dowlink_mtype:MTYPE_UNCONF_DN\n");
-                else if (ping_dowlink_mtype == MTYPE_CONF_DN)
-                    printf("ping_dowlink_mtype:MTYPE_CONF_DN\n");
-                return 1;   
+                if (user_dowlink_mtype == MTYPE_UNCONF_DN)
+                    printf("user_dowlink_mtype:MTYPE_UNCONF_DN\n");
+                else if (user_dowlink_mtype == MTYPE_CONF_DN)
+                    printf("user_dowlink_mtype:MTYPE_CONF_DN\n");
+                return 1;
             case '?':
                 printf("C       set ping dowlink to Confirmed\n");
                 printf("U       set ping dowlink to Unconfirmed\n");
-                return 1;   
+                printf("sb%%d       skip sending N beacons\n");
+                return 1;
             default: return 0;
         }
+    } else if (cmd_buf[0] == 's' && cmd_buf[1] == 'b') {
+        int n = sscanf((char*)cmd_buf+2, "%d", &skip_beacon_cnt);
+        printf("%d = sscanf() skip_beacon_cnt:%d\n", n, skip_beacon_cnt);
+        return 1;
     }
     return 0;
 }
@@ -1089,7 +1102,7 @@ lorawan_kbd_input()
 {
 #ifdef ENABLE_CLASS_B
     uint32_t trig_tstamp;
-#endif	/* ENABLE_CLASS_B */
+#endif    /* ENABLE_CLASS_B */
 
     if (!inputAvailable())
         return;
@@ -1131,13 +1144,13 @@ lorawan_kbd_input()
     uint32_t us_since_pingslot_zero = trig_tstamp - trigcnt_pingslot_zero;
     uint16_t current_pingslot = us_since_pingslot_zero / 30000;
     printf("current_pingslot :%u\n", current_pingslot);
-	current_pingslot += 4;	// give some time margin to load packet into transmitter
+    current_pingslot += 4;    // give some time margin to load packet into transmitter
 
     ping_mote = mote;
     ping_tx_pkt.freq_hz = PINGSLOT_CHANNEL_FREQ(0); // TODO use address in idle state
     ping_tx_pkt.bandwidth = data_rates[ping_mote->ping_slot_info.bits.datarate].bw;
     ping_tx_pkt.datarate = data_rates[ping_mote->ping_slot_info.bits.datarate].bps_sf;
-    ping_tx_pkt.payload[0] = ping_dowlink_mtype << 5; // MHDR
+    ping_tx_pkt.payload[0] = user_dowlink_mtype << 5; // MHDR
     fhdr_t* tx_fhdr = (fhdr_t*)&ping_tx_pkt.payload[1];
 
     tx_fhdr->FCtrl.octet = 0;
@@ -1176,7 +1189,7 @@ lorawan_kbd_input()
         ping_tx_pkt.freq_hz = 0;
     } else
         printf("_send_downlink() failed\n");
-#endif	/* ENABLE_CLASS_B */
+#endif    /* ENABLE_CLASS_B */
 }
 
 
