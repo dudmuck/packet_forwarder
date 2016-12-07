@@ -738,8 +738,7 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
         }
     }
 
-    if (tx_fhdr->FCtrl.dlBits.FOptsLen > 0 ||
-        (rx_mhdr->bits.MType == MTYPE_CONF_UP && !rx_fhdr->FCtrl.ulBits.ACK) ||
+    if (tx_fhdr->FCtrl.dlBits.FOptsLen > 0 || rx_mhdr->bits.MType == MTYPE_CONF_UP ||
         user_downlink_length != -1)
     {
         /* something to send via downlink */
