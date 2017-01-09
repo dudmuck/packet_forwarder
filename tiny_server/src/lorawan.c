@@ -443,7 +443,7 @@ void
 lorawan_service_ping()
 {
     if (ping_tx_pkt.freq_hz == 0)
-        return;
+        return;   // nothing to send
 
     /* send ping if it had to be postponed */
     uint16_t use_pingslot = ping_mote->ping_offset;
@@ -457,7 +457,7 @@ lorawan_service_ping()
         user_downlink_length = -1;
         ping_tx_pkt.freq_hz = 0;
     } else
-        printf("_send_downlink() failed\n");
+        printf("service-ping _send_downlink() failed\n");
 }
 
 void
@@ -733,6 +733,11 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
             printf("app-decrypt:");
             for (rxofs = 0; rxofs < rxFRMPayload_length; rxofs++) {
                 printf("%02x ", decrypted[rxofs]);
+            }
+            printf("  ");
+            for (rxofs = 0; rxofs < rxFRMPayload_length; rxofs++) {
+                if (decrypted[rxofs] >= ' ' && decrypted[rxofs] < 0x7f)
+                    printf("%c", decrypted[rxofs]);
             }
             printf("\n");
         }
@@ -1096,13 +1101,43 @@ bool inputAvailable()
   return (FD_ISSET(0, &fds));
 }
 
+void _print_tx_status(uint8_t tx_status)
+{
+    printf("TX_STATUS: ");
+    switch (tx_status) {
+        case TX_OFF:
+            printf("TX_OFF\n");
+            break;
+        case TX_FREE:
+            printf("TX_FREE\n");
+            break;
+        case TX_EMITTING:
+            printf("TX_EMITTING\n");
+            break;
+        case TX_SCHEDULED:
+            printf("TX_SCHEDULED\n");
+            break;
+        default:
+            printf("lgw_status returned UNKNOWN (%d)\n", tx_status);
+            break;
+    }
+}
+
 void
 lorawan_kbd_input()
 {
+    uint8_t tx_status;
+    static uint8_t prev_tx_status = TX_OFF;
 #ifdef ENABLE_CLASS_B
     uint32_t trig_tstamp;
 #endif    /* ENABLE_CLASS_B */
 
+    lgw_status(TX_STATUS, &tx_status);
+    if (prev_tx_status != tx_status) {
+        _print_tx_status(tx_status);
+        prev_tx_status = tx_status;
+    }
+    
     if (!inputAvailable())
         return;
 
@@ -1143,7 +1178,7 @@ lorawan_kbd_input()
     uint32_t us_since_pingslot_zero = trig_tstamp - trigcnt_pingslot_zero;
     uint16_t current_pingslot = us_since_pingslot_zero / 30000;
     printf("current_pingslot :%u\n", current_pingslot);
-    current_pingslot += 4;    // give some time margin to load packet into transmitter
+    current_pingslot += 6;    // give some time margin to load packet into transmitter
 
     ping_mote = mote;
     ping_tx_pkt.freq_hz = PINGSLOT_CHANNEL_FREQ(0); // TODO use address in idle state
@@ -1186,10 +1221,15 @@ lorawan_kbd_input()
         /* mark as sent */
         user_downlink_length = -1;
         ping_tx_pkt.freq_hz = 0;
+
+        lgw_status(TX_STATUS, &tx_status);
+        _print_tx_status(tx_status);
+        prev_tx_status = tx_status;
     } else
-        printf("_send_downlink() failed\n");
+        printf("ping _send_downlink() failed\n");
 #endif    /* ENABLE_CLASS_B */
 }
+
 
 
 #if 0

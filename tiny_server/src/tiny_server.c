@@ -970,8 +970,9 @@ void pps(uint32_t trig_tstamp)
     int dev = abs(million - 1000000);
 
     if (prev_utc_sec.tv_sec+1 != g_utc_time.tv_sec) {
-        printf("[31mmissing second[0m\n");
+        printf("[31mmissing second %lu -> %lu[0m\n", prev_utc_sec.tv_sec, g_utc_time.tv_sec);
         //exit(EXIT_FAILURE);
+        prev_utc_sec.tv_sec = g_utc_time.tv_sec;
         return;
     }
     prev_utc_sec.tv_sec = g_utc_time.tv_sec;
@@ -1022,12 +1023,12 @@ void pps(uint32_t trig_tstamp)
         send_saved_ping = true;
     } else if (send_saved_ping) {
         uint8_t status;
+        beacon_guard = false;
         lgw_status(TX_STATUS, &status);
         if (status == TX_FREE) {
-            send_saved_ping = false;
             lorawan_service_ping();
+            send_saved_ping = false;
         }
-        beacon_guard = false;
     }
 
 }
