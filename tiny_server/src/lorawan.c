@@ -681,7 +681,7 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
     struct lgw_pkt_tx_s tx_pkt;
     uint8_t decrypted[256];
     uint32_t calculated_mic;
-    uint32_t* rx_mic;
+    uint32_t rx_mic;
     mhdr_t *rx_mhdr = (mhdr_t*)&rx_pkt->payload[0];
     fhdr_t *rx_fhdr = (fhdr_t*)&rx_pkt->payload[1];
     fhdr_t* tx_fhdr = (fhdr_t*)&tx_pkt.payload[1];
@@ -719,9 +719,12 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
     }
 
     LoRa_GenerateDataFrameIntegrityCode(mote->network_session_key, rx_pkt->payload, rx_pkt->size-LORA_FRAMEMICBYTES, rx_fhdr->DevAddr, true, rx_fhdr->FCnt, (uint8_t*)&calculated_mic);
-    rx_mic = (uint32_t*)&rx_pkt->payload[rx_pkt->size-LORA_FRAMEMICBYTES];
-    if (calculated_mic != *rx_mic) {
-        printf("[31mgenMic:%08x, rxMic:%08x\n", calculated_mic, *rx_mic);
+    rx_mic = rx_pkt->payload[rx_pkt->size-1] << 24;
+    rx_mic += rx_pkt->payload[rx_pkt->size-2] << 16;
+    rx_mic += rx_pkt->payload[rx_pkt->size-3] << 8;
+    rx_mic += rx_pkt->payload[rx_pkt->size-4];
+    if (calculated_mic != rx_mic) {
+        printf("[31mgenMic:%08x, rxMic:%08x\n", calculated_mic, rx_mic);
         printf("mic fail[0m\n");
         return;
     }
@@ -953,7 +956,7 @@ static void
 parse_join_req(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
 {
     uint32_t calculated_mic;
-    uint32_t* rx_mic = (uint32_t*)&rx_pkt->payload[rx_pkt->size-LORA_FRAMEMICBYTES];
+    uint32_t rx_mic;
     join_req_t* jreq_ptr = (join_req_t*)&rx_pkt->payload[0];
 
     if (verbose) {
@@ -968,8 +971,12 @@ parse_join_req(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
     }
 
     LoRa_GenerateJoinFrameIntegrityCode(mote->app_key, rx_pkt->payload, rx_pkt->size-LORA_FRAMEMICBYTES, (uint8_t*)&calculated_mic);
-    if (calculated_mic != *rx_mic) {
-        printf("join_req mic fail: %08x, %08x\n", calculated_mic, *rx_mic);
+    rx_mic = rx_pkt->payload[rx_pkt->size-1] << 24;
+    rx_mic += rx_pkt->payload[rx_pkt->size-2] << 16;
+    rx_mic += rx_pkt->payload[rx_pkt->size-3] << 8;
+    rx_mic += rx_pkt->payload[rx_pkt->size-4];
+    if (calculated_mic != rx_mic) {
+        printf("join_req mic fail: %08x, %08x\n", calculated_mic, rx_mic);
         return;
     }
 

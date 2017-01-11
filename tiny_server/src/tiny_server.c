@@ -806,6 +806,9 @@ int main(int argc, char **argv)
             printf("WARNING: [main] impossible to open %s for GPS sync (check permissions)\n", gps_tty_path);
             gps_enabled = false;
             gps_ref_valid = false;
+#ifdef ENABLE_CLASS_B
+            return -1;  // impossible to run class-B without GPS
+#endif
         } else {
             printf("INFO: [main] TTY port %s open for GPS synchronization\n", gps_tty_path);
             gps_enabled = true;

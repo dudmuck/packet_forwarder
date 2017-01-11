@@ -90,12 +90,16 @@ join_test()
         0x00, 0x37, 0x6a, 0x30, 0x9e, 0x30, 0x34, 0x51,
         0x19, 0x9a, 0x53, 0x4b, 0x41, 0x67, 0x38 
     };
-    uint32_t* rx_mic = (uint32_t*)&payload[sizeof(payload)-LORA_FRAMEMICBYTES];
+    uint32_t rx_mic;
     uint32_t calculated_mic;
 
     LoRa_GenerateJoinFrameIntegrityCode(app_key, payload, sizeof(payload)-LORA_FRAMEMICBYTES, (uint8_t*)&calculated_mic);
     printf("calculated_mic:%08x\n", calculated_mic);
-    printf("rx_mic:%08x\n", *rx_mic);
+    rx_mic = payload[sizeof(payload)-1] << 24;
+    rx_mic += payload[sizeof(payload)-2] << 16;
+    rx_mic += payload[sizeof(payload)-3] << 8;
+    rx_mic += payload[sizeof(payload)-4];
+    printf("rx_mic:%08x\n", rx_mic);
 }
 
 int main(int argc, char **argv)

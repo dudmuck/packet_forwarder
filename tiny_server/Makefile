@@ -6,8 +6,10 @@ APP_TEST_NAME := aes_test
 ### Environment constants 
 
 LGW_PATH ?= ../../lora_gateway/libloragw
-ARCH ?=arm
-CROSS_COMPILE ?=/opt/toolchains/arm-2011.03-wirgrid/bin/arm-none-linux-gnueabi-
+ARCH ?=
+CROSS_COMPILE ?=
+#ARCH ?=arm
+#CROSS_COMPILE ?=/opt/toolchains/arm-2011.03-wirgrid/bin/arm-none-linux-gnueabi-
 
 OBJDIR = obj
 INCLUDES = $(wildcard inc/*.h)

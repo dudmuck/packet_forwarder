@@ -48,8 +48,10 @@
 #include <stdlib.h>
 
 /* define if you have fast 32-bit types on your system */
-#if 1
-#  define HAVE_UINT_32T
+#ifdef __ARM_ARCH_5TEJ__
+    #undef HAVE_UINT_32T
+#else
+    #define HAVE_UINT_32T
 #endif
 
 /* define if you don't want any tables */
