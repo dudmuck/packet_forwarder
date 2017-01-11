@@ -105,6 +105,7 @@ Maintainer: Michael Coracin
 #define TX_BUFF_SIZE    ((540 * NB_PKT_MAX) + 30 + STATUS_SIZE)
 
 /* -------------------------------------------------------------------------- */
+bool verbose = false;
 /* --- PRIVATE VARIABLES (GLOBAL) ------------------------------------------- */
 
 /* signal handling variables */
@@ -735,8 +736,12 @@ int main(int argc, char **argv)
 #endif    /* ENABLE_CLASS_B */
     //pthread_t thrid_test;
 
-    while ((opt = getopt(argc, argv, "nt:")) != -1) {
+    while ((opt = getopt(argc, argv, "vnt:")) != -1) {
         switch (opt) {
+            case 'v':
+                verbose = true;
+                printf("### verbose mode ###\n");
+                break;
             case 'n':
                 //cnt_test = 1;
                 break;

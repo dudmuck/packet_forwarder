@@ -705,6 +705,18 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
 
     tx_pkt.size = 0;
 
+    if (verbose) {
+        int i;
+        printf("\nnskey:");
+        for (i = 0; i < LORA_CYPHERKEYBYTES; i++)
+            printf("%02x ", mote->network_session_key[i]);
+        printf("rx_pkt->payload:");
+        for (i = 0; i < rx_pkt->size; i++)
+            printf("%02x ", rx_pkt->payload[i]);
+        printf("\n");
+        printf("rx_fhdr->DevAddr:%08x\n", rx_fhdr->DevAddr);
+        printf("rx_fhdr->FCnt:%u\n", rx_fhdr->FCnt);
+    }
 
     LoRa_GenerateDataFrameIntegrityCode(mote->network_session_key, rx_pkt->payload, rx_pkt->size-LORA_FRAMEMICBYTES, rx_fhdr->DevAddr, true, rx_fhdr->FCnt, (uint8_t*)&calculated_mic);
     rx_mic = (uint32_t*)&rx_pkt->payload[rx_pkt->size-LORA_FRAMEMICBYTES];
@@ -943,6 +955,17 @@ parse_join_req(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
     uint32_t calculated_mic;
     uint32_t* rx_mic = (uint32_t*)&rx_pkt->payload[rx_pkt->size-LORA_FRAMEMICBYTES];
     join_req_t* jreq_ptr = (join_req_t*)&rx_pkt->payload[0];
+
+    if (verbose) {
+        int i;
+        printf("\nappkey:");
+        for (i = 0; i < LORA_CYPHERKEYBYTES; i++)
+            printf("%02x ", mote->app_key[i]);
+        printf("\nrx_pkt->payload:");
+        for (i = 0; i < rx_pkt->size; i++)
+            printf("%02x ", rx_pkt->payload[i]);
+        printf("\n");
+    }
 
     LoRa_GenerateJoinFrameIntegrityCode(mote->app_key, rx_pkt->payload, rx_pkt->size-LORA_FRAMEMICBYTES, (uint8_t*)&calculated_mic);
     if (calculated_mic != *rx_mic) {

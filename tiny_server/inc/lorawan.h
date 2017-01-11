@@ -32,6 +32,8 @@ extern bool beacon_guard;  // from tiny server
 extern int skip_beacon_cnt;
 #endif	/* ENABLE_CLASS_B */
 
+extern bool verbose;    // from tiny server
+
 
 double difftimespec(struct timespec end, struct timespec beginning);  // from tiny server
 

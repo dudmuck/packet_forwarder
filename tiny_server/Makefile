@@ -1,12 +1,13 @@
 ### Application-specific constants
 
 APP_NAME := tiny_server
+APP_TEST_NAME := aes_test
 
 ### Environment constants 
 
 LGW_PATH ?= ../../lora_gateway/libloragw
-ARCH ?=
-CROSS_COMPILE ?=
+ARCH ?=arm
+CROSS_COMPILE ?=/opt/toolchains/arm-2011.03-wirgrid/bin/arm-none-linux-gnueabi-
 
 OBJDIR = obj
 INCLUDES = $(wildcard inc/*.h)
@@ -52,11 +53,12 @@ endif
 
 ### General build targets
 
-all: $(APP_NAME)
+all: $(APP_NAME) $(APP_TEST_NAME)
 
 clean:
 	rm -f $(OBJDIR)/*.o
 	rm -f $(APP_NAME)
+	rm -f $(APP_TEST_NAME)
 
 ### Sub-modules compilation
 
@@ -71,9 +73,17 @@ $(OBJDIR)/%.o: src/%.c $(INCLUDES) | $(OBJDIR)
 $(OBJDIR)/$(APP_NAME).o: src/$(APP_NAME).c $(LGW_INC) $(INCLUDES) | $(OBJDIR)
 	$(CC) -c $(CFLAGS) $(VFLAG) -I$(LGW_PATH)/inc $< -o $@
 
+$(OBJDIR)/$(APP_TEST_NAME).o: src/$(APP_TEST_NAME).c $(LGW_INC) $(INCLUDES) | $(OBJDIR)
+	$(CC) -c $(CFLAGS) $(VFLAG) -I$(LGW_PATH)/inc $< -o $@
+
 OBJS := $(OBJDIR)/parson.o $(OBJDIR)/base64.o $(OBJDIR)/lorawan.o $(OBJDIR)/aes.o $(OBJDIR)/cmac.o $(OBJDIR)/lorawan_bands.o
 
 $(APP_NAME): $(OBJDIR)/$(APP_NAME).o $(LGW_PATH)/libloragw.a $(OBJS)
 	$(CC) -L$(LGW_PATH) $< $(OBJS) -o $@ $(LIBS)
+
+TEST_OBJS := $(OBJDIR)/parson.o $(OBJDIR)/base64.o $(OBJDIR)/aes.o $(OBJDIR)/cmac.o
+
+$(APP_TEST_NAME): $(OBJDIR)/$(APP_TEST_NAME).o $(LGW_PATH)/libloragw.a $(TEST_OBJS)
+	$(CC) -L$(LGW_PATH) $< $(TEST_OBJS) -o $@ $(LIBS)
 
 ### EOF
