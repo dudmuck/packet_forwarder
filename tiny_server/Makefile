@@ -28,12 +28,16 @@ AR := $(CROSS_COMPILE)ar
 CFLAGS := -O2 -g -Wall -Wextra -std=c99 -Iinc -I.
 VFLAG := -D VERSION_STRING="\"$(RELEASE_VERSION)\""
 
+ifdef ENABLE_HAL_UBX
+CFLAGS += -DENABLE_HAL_UBX
+endif
+
 # remove if only need class-A:
 CFLAGS += -DENABLE_CLASS_B
 
 #CFLAGS += -DUSE_BAND_915
 #CFLAGS += -DUSE_BAND_868
-CFLAGS += -DUSE_BAND_JPN920
+CFLAGS += -DUSE_BAND_ARIB_8CH
 
 ### Constants for Lora concentrator HAL library
 # List the library sub-modules that are used by the application

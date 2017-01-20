@@ -451,12 +451,14 @@ static int parse_SX1301_configuration(const char * conf_file) {
         if (ifconf.enable == false) { /* Lora multi-SF channel disabled, nothing else to parse */
             MSG("INFO: Lora multi-SF channel %i disabled\n", i);
         } else  { /* Lora multi-SF channel enabled, will parse the other parameters */
+            float MHz;
             snprintf(param_name, sizeof param_name, "chan_multiSF_%i.radio", i);
             ifconf.rf_chain = (uint32_t)json_object_dotget_number(conf_obj, param_name);
             snprintf(param_name, sizeof param_name, "chan_multiSF_%i.if", i);
             ifconf.freq_hz = (int32_t)json_object_dotget_number(conf_obj, param_name);
             // TODO: handle individual SF enabling and disabling (spread_factor)
-            MSG("INFO: Lora multi-SF channel %i>  radio %i, IF %i Hz, 125 kHz bw, SF 7 to 12\n", i, ifconf.rf_chain, ifconf.freq_hz);
+            MHz = (cf_hz[ifconf.rf_chain] + ifconf.freq_hz) / 1e6;
+            MSG("INFO: Lora multi-SF channel %i>  radio %i, IF %i Hz (%.1f), 125 kHz bw, SF 7 to 12\n", i, ifconf.rf_chain, ifconf.freq_hz, MHz);
             uint32_t cf = cf_hz[ifconf.rf_chain] + ifconf.freq_hz;
             if (check_band_config(cf) < 0) {
                 exit(EXIT_FAILURE);
@@ -955,18 +957,27 @@ load_beacon(uint32_t seconds)
 
 #ifdef ENABLE_CLASS_B
 struct timespec g_utc_time; /* UTC time associated with PPS pulse */
+struct timespec g_gps_time; /* UBX time associated with PPS pulse */
+
+#ifdef ENABLE_HAL_UBX
+struct timespec* time_ptr = &g_gps_time;
+#else
+struct timespec* time_ptr = &g_utc_time;
+#endif
 
 uint32_t prev_tstamp_at_beacon_tx;
 bool send_saved_ping = false;
 bool first_diff = true;
 uint32_t prev_trig_tstamp;
 struct timespec prev_utc_sec;
+uint8_t pps_cnt;
 
 void pps_init(uint32_t trig_tstamp)
 {
     prev_trig_tstamp = trig_tstamp;
     first_diff = true;
-    prev_utc_sec.tv_sec = g_utc_time.tv_sec;
+    prev_utc_sec.tv_sec = time_ptr->tv_sec;
+    pps_cnt = 0;
 }
 
 void pps(uint32_t trig_tstamp)
@@ -977,13 +988,13 @@ void pps(uint32_t trig_tstamp)
     int million = trig_tstamp - prev_trig_tstamp;
     int dev = abs(million - 1000000);
 
-    if (prev_utc_sec.tv_sec+1 != g_utc_time.tv_sec) {
-        printf("[31mmissing second %lu -> %lu[0m\n", prev_utc_sec.tv_sec, g_utc_time.tv_sec);
+    if (prev_utc_sec.tv_sec+1 != time_ptr->tv_sec) {
+        printf("[31mmissing second %lu -> %lu[0m\n", prev_utc_sec.tv_sec, time_ptr->tv_sec);
         //exit(EXIT_FAILURE);
-        prev_utc_sec.tv_sec = g_utc_time.tv_sec;
+        prev_utc_sec.tv_sec = time_ptr->tv_sec;
         return;
     }
-    prev_utc_sec.tv_sec = g_utc_time.tv_sec;
+    prev_utc_sec.tv_sec = time_ptr->tv_sec;
 
     if (dev > 100) {
         printf("dev > 100: %d = %d - %d\n", million, trig_tstamp, prev_trig_tstamp);
@@ -992,11 +1003,12 @@ void pps(uint32_t trig_tstamp)
 
     prev_trig_tstamp = trig_tstamp;
 
-    if ((g_utc_time.tv_sec & beacon_period_mask) == beacon_period_mask) {
-        printf("pps utc:%08lx   %u\n", g_utc_time.tv_sec, trig_tstamp);
-        load_beacon(g_utc_time.tv_sec+1);
+    if ((time_ptr->tv_sec & beacon_period_mask) == beacon_period_mask) {
+        printf("pps utc:%lx   tstamp:%u, pps_cnt:%u\n", time_ptr->tv_sec, trig_tstamp, pps_cnt);
+        pps_cnt = 0;
+        load_beacon(time_ptr->tv_sec+1);
         save_next_tstamp = true;
-    } else if ((g_utc_time.tv_sec & beacon_period_mask) == (beacon_period_mask-2)) {
+    } else if ((time_ptr->tv_sec & beacon_period_mask) == (beacon_period_mask-2)) {
         beacon_guard = true;
     } else if (save_next_tstamp) {
         save_next_tstamp = false;
@@ -1019,7 +1031,7 @@ void pps(uint32_t trig_tstamp)
         uint32_t reserved_trigcnt_offset = 2120000 + (g_sx1301_ppm_err * 2.12);
         trigcnt_pingslot_zero = trig_tstamp + reserved_trigcnt_offset;
 
-        lorawan_update_ping_offsets(g_utc_time.tv_sec);
+        lorawan_update_ping_offsets(time_ptr->tv_sec);
 
         int error_us = g_sx1301_ppm_err * beacon_period;
         uint32_t beacon_period_us = beacon_period * 1000000;
@@ -1027,7 +1039,7 @@ void pps(uint32_t trig_tstamp)
         beacon_valid = true;
         printf("error_us:%d, beacon_period_us:%u, lgw_trigcnt_at_next_beacon:%u\n", error_us, beacon_period_us, lgw_trigcnt_at_next_beacon);
 
-        BeaconCtx.BeaconTime = g_utc_time.tv_sec - beacon_period;
+        BeaconCtx.BeaconTime = time_ptr->tv_sec - beacon_period;
         send_saved_ping = true;
     } else if (send_saved_ping) {
         uint8_t status;
@@ -1041,6 +1053,8 @@ void pps(uint32_t trig_tstamp)
 
 }
 #endif    /* ENABLE_CLASS_B */
+
+struct timespec uart_host_time, pps_host_time;
 
 /* -------------------------------------------------------------------------- */
 /* --- THREAD 1: RECEIVING PACKETS AND FORWARDING THEM ---------------------- */
@@ -1097,6 +1111,16 @@ void thread_up(void) {
             i = lgw_get_trigcnt(&trig_tstamp);
             pthread_mutex_unlock(&mx_concent);
             if (prev_trig_tstamp != trig_tstamp) {
+                double secs;
+                pps_cnt++;
+                //struct timespec now;
+                if (clock_gettime (CLOCK_MONOTONIC, &pps_host_time) == -1)
+                    perror ("clock_gettime");
+                //printf("pps @ %lu.%09lu\n", pps_host_time.tv_sec, pps_host_time.tv_nsec);
+                secs = difftimespec(pps_host_time, uart_host_time);
+                /*if (secs > 0.97 || secs < 0.85)
+                    printf("[31m");
+                printf("pps: %f since uart, time:%lu.%09lu, %02x[0m\n", secs, time_ptr->tv_sec, time_ptr->tv_nsec, pps_cnt);*/
                 pps(trig_tstamp);
             }
 #endif    /* ENABLE_CLASS_B */
@@ -1149,6 +1173,116 @@ void thread_up(void) {
 #ifdef ENABLE_CLASS_B
 float g_sx1301_ppm_err = 0; // sx1301 timestamp error in a single second
 
+#ifdef ENABLE_HAL_UBX
+void thread_gps(void)
+{
+    /* serial variables */
+    char serial_buff[128]; /* buffer to receive GPS data */
+    size_t wr_idx = 0;     /* pointer to end of chars in buffer */
+
+    /* variables for PPM pulse GPS synchronization */
+    enum gps_msg latest_msg; /* keep track of latest NMEA message parsed */
+
+    /* initialize some variables before loop */
+    memset(serial_buff, 0, sizeof serial_buff);
+
+    while (!exit_sig && !quit_sig) {
+        size_t rd_idx = 0;
+        size_t frame_end_idx = 0;
+
+        /* blocking non-canonical read on serial port */
+        ssize_t nb_char = read(gps_tty_fd, serial_buff + wr_idx, LGW_GPS_MIN_MSG_SIZE);
+        if (nb_char <= 0) {
+            MSG("WARNING: [gps] read() returned value %d\n", nb_char);
+            continue;
+        }
+        wr_idx += (size_t)nb_char;
+
+        /*******************************************
+         * Scan buffer for UBX/NMEA sync chars and *
+         * attempt to decode frame if one is found *
+         *******************************************/
+        while(rd_idx < wr_idx) {
+            size_t frame_size = 0;
+
+            /* Scan buffer for UBX sync char */
+            if(serial_buff[rd_idx] == (char)LGW_GPS_UBX_SYNC_CHAR) {
+
+                /***********************
+                 * Found UBX sync char *
+                 ***********************/
+                latest_msg = lgw_parse_ubx(&serial_buff[rd_idx], (wr_idx - rd_idx), &frame_size);
+
+                if (frame_size > 0) {
+                    if (latest_msg == INCOMPLETE) {
+                        /* UBX header found but frame appears to be missing bytes */
+                        frame_size = 0;
+                    } else if (latest_msg == INVALID) {
+                        /* message header received but message appears to be corrupted */
+                        MSG("WARNING: [gps] could not get a valid message from GPS (no time)\n");
+                        frame_size = 0;
+                    } else if (latest_msg == UBX_NAV_TIMEGPS) {
+                        double secs;
+                        if (clock_gettime (CLOCK_MONOTONIC, &uart_host_time) == -1)
+                            perror ("clock_gettime");
+                        //printf("ubx @ %lu.%09lu\n", uart_host_time.tv_sec, uart_host_time.tv_nsec);
+
+                        int i = lgw_gps_get(&g_utc_time, &g_gps_time, NULL, NULL);
+                        if (i != LGW_GPS_SUCCESS) {
+                            MSG("WARNING: [gps] could not get GPS time from GPS\n");
+                        }
+                        secs = difftimespec(uart_host_time, pps_host_time);
+                        if (secs < 0.02 || secs > 0.17)
+                            printf("[31m");
+                        printf("uart: %f since pps, ubx:%lu.%09lu[0m\n", secs, g_gps_time.tv_sec, g_gps_time.tv_nsec);
+                    }
+                }
+            } else if(serial_buff[rd_idx] == LGW_GPS_NMEA_SYNC_CHAR) {
+                /************************
+                 * Found NMEA sync char *
+                 ************************/
+                /* scan for NMEA end marker (LF = 0x0a) */
+                char* nmea_end_ptr = memchr(&serial_buff[rd_idx],(int)0x0a, (wr_idx - rd_idx));
+
+                if(nmea_end_ptr) {
+                    /* found end marker */
+                    frame_size = nmea_end_ptr - &serial_buff[rd_idx] + 1;
+                    latest_msg = lgw_parse_nmea(&serial_buff[rd_idx], frame_size);
+
+                    if(latest_msg == INVALID || latest_msg == UNKNOWN) {
+                        /* checksum failed */
+                        frame_size = 0;
+                    } else if (latest_msg == NMEA_RMC) { /* Get location from RMC frames */
+                        //gps_process_coords();
+                    }
+                }
+            }
+
+            if(frame_size > 0) {
+                /* At this point message is a checksum verified frame
+                   we're processed or ignored. Remove frame from buffer */
+                rd_idx += frame_size;
+                frame_end_idx = rd_idx;
+            } else {
+                rd_idx++;
+            }
+        } /* ...for(rd_idx = 0... */
+
+        if(frame_end_idx) {
+          /* Frames have been processed. Remove bytes to end of last processed frame */
+          memcpy(serial_buff,&serial_buff[frame_end_idx],wr_idx - frame_end_idx);
+          wr_idx -= frame_end_idx;
+        } /* ...for(rd_idx = 0... */
+
+        /* Prevent buffer overflow */
+        if((sizeof(serial_buff) - wr_idx) < LGW_GPS_MIN_MSG_SIZE) {
+            memcpy(serial_buff,&serial_buff[LGW_GPS_MIN_MSG_SIZE],wr_idx - LGW_GPS_MIN_MSG_SIZE);
+            wr_idx -= LGW_GPS_MIN_MSG_SIZE;
+        }
+    }
+    MSG("\nINFO: End of GPS thread\n");
+}
+#else
 void thread_gps(void)
 {
     while (!exit_sig && !quit_sig)
@@ -1174,16 +1308,23 @@ void thread_gps(void)
         latest_msg = lgw_parse_nmea(serial_buff, sizeof(serial_buff));
 
         if (latest_msg == NMEA_RMC || latest_msg == NMEA_GGA ) { 
+            double secs;
+            if (clock_gettime (CLOCK_MONOTONIC, &uart_host_time) == -1)
+                perror ("clock_gettime");
             /* get UTC time for synchronization */
             i = lgw_gps_get(&g_utc_time, NULL, NULL);
             if (i != LGW_GPS_SUCCESS) {
                 MSG("WARNING: [gps] could not get UTC time from GPS\n");
                 continue;
             }
+            secs = difftimespec(uart_host_time, pps_host_time);
+            //printf("uart: %f since pps, ubx:%lu.%09lu[0m\n", secs, g_utc_time.tv_sec, g_utc_time.tv_nsec);
         } 
 
     } // ...while (!exit_sig && !quit_sig)
 }
+#endif /* !ENABLE_HAL_UBX */
+
 #endif    /* ENABLE_CLASS_B */
 
 void print_tx_status(uint8_t tx_status) {

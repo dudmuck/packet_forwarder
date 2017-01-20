@@ -286,7 +286,7 @@ int check_band_config(uint32_t cf)
     return 0;
 }
 
-#elif defined(USE_BAND_JPN920)
+#elif defined(USE_BAND_ARIB_8CH)
 
 const data_rate_t data_rates[] = {
     { BW_125KHZ, DR_LORA_SF12 },    // DR0
@@ -300,9 +300,10 @@ const data_rate_t data_rates[] = {
 };
 
 void
-get_rx2_config(struct lgw_pkt_tx_s* tx_pkt)     // jpn920
+get_rx2_config(struct lgw_pkt_tx_s* tx_pkt)     // arb-actility
 {
     Rx2ChannelParams_t Rx2Channel = RX_WND_2_CHANNEL;
+    /* TODO: join accept Rx2 */
 
     tx_pkt->freq_hz = Rx2Channel.Frequency;
     tx_pkt->modulation = MOD_LORA;
@@ -328,8 +329,7 @@ get_rx2_config(struct lgw_pkt_tx_s* tx_pkt)     // jpn920
 
 void band_conv(struct lgw_pkt_rx_s* rx_pkt, struct lgw_pkt_tx_s* tx_pkt)
 {
-    printf("jpn920-band_conv(): rx:%uhz ", rx_pkt->freq_hz);
-
+    printf("arib-band_conv(): rx:%uhz ", rx_pkt->freq_hz);
     if (dl_rxwin == 1) {
         tx_pkt->freq_hz = rx_pkt->freq_hz;
         tx_pkt->datarate = rx_pkt->datarate;
@@ -337,13 +337,12 @@ void band_conv(struct lgw_pkt_rx_s* rx_pkt, struct lgw_pkt_tx_s* tx_pkt)
     } else if (dl_rxwin == 2) {
         get_rx2_config(tx_pkt);
     }
-
 }
 
 int check_band_config(uint32_t cf)
 {
     if (cf < 920600000 || cf > 923600000) {
-        printf("USE_BAND_JPN920 rx cf %uhz out of range\n", cf);
+        printf("ARIB_8CH rx cf %uhz out of range\n", cf);
         return -1;
     }
     return 0;
