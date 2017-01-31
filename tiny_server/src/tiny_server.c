@@ -955,6 +955,9 @@ load_beacon(uint32_t seconds)
     }
 }
 
+struct timespec uart_host_time, pps_host_time;
+struct timespec host_time_at_beacon;
+
 #ifdef ENABLE_CLASS_B
 struct timespec g_utc_time; /* UTC time associated with PPS pulse */
 struct timespec g_gps_time; /* UBX time associated with PPS pulse */
@@ -966,7 +969,7 @@ struct timespec* time_ptr = &g_utc_time;
 #endif
 
 uint32_t prev_tstamp_at_beacon_tx;
-bool send_saved_ping = false;
+//bool send_saved_ping = false;
 bool first_diff = true;
 uint32_t prev_trig_tstamp;
 struct timespec prev_utc_sec;
@@ -974,10 +977,16 @@ uint8_t pps_cnt;
 
 void pps_init(uint32_t trig_tstamp)
 {
+    uint8_t beacon_period_mask = beacon_period - 1;
+    uint32_t seconds_to_beacon = ((time_ptr->tv_sec | beacon_period_mask) + 1) - time_ptr->tv_sec;
+    printf("pps_init time_ptr->tv_sec:%lx, seconds_to_beacon:%u", time_ptr->tv_sec, seconds_to_beacon);
+
     prev_trig_tstamp = trig_tstamp;
     first_diff = true;
     prev_utc_sec.tv_sec = time_ptr->tv_sec;
-    pps_cnt = 0;
+    pps_cnt = (beacon_period - seconds_to_beacon) + 1;
+    lgw_trigcnt_at_next_beacon = trig_tstamp + (seconds_to_beacon * 1000000);
+    printf(" lgw_trigcnt_at_next_beacon:%u\n", lgw_trigcnt_at_next_beacon);
 }
 
 void pps(uint32_t trig_tstamp)
@@ -1012,6 +1021,7 @@ void pps(uint32_t trig_tstamp)
         beacon_guard = true;
     } else if (save_next_tstamp) {
         save_next_tstamp = false;
+        memcpy(&host_time_at_beacon, &pps_host_time, sizeof(struct timespec));
         prev_tstamp_at_beacon_tx = tstamp_at_beacon_tx;
         tstamp_at_beacon_tx = trig_tstamp;
         printf("tstamp_at_beacon_tx:%u, predicted:%u\n",  tstamp_at_beacon_tx, lgw_trigcnt_at_next_beacon);
@@ -1036,12 +1046,12 @@ void pps(uint32_t trig_tstamp)
         int error_us = g_sx1301_ppm_err * beacon_period;
         uint32_t beacon_period_us = beacon_period * 1000000;
         lgw_trigcnt_at_next_beacon = trig_tstamp + (beacon_period_us - error_us);
-        beacon_valid = true;
         printf("error_us:%d, beacon_period_us:%u, lgw_trigcnt_at_next_beacon:%u\n", error_us, beacon_period_us, lgw_trigcnt_at_next_beacon);
 
         BeaconCtx.BeaconTime = time_ptr->tv_sec - beacon_period;
-        send_saved_ping = true;
-    } else if (send_saved_ping) {
+        //send_saved_ping = true;
+        beacon_guard = false;
+    } /*else if (send_saved_ping) {
         uint8_t status;
         beacon_guard = false;
         lgw_status(TX_STATUS, &status);
@@ -1049,12 +1059,11 @@ void pps(uint32_t trig_tstamp)
             lorawan_service_ping();
             send_saved_ping = false;
         }
-    }
+    }*/
 
 }
 #endif    /* ENABLE_CLASS_B */
 
-struct timespec uart_host_time, pps_host_time;
 
 /* -------------------------------------------------------------------------- */
 /* --- THREAD 1: RECEIVING PACKETS AND FORWARDING THEM ---------------------- */
@@ -1111,16 +1120,19 @@ void thread_up(void) {
             i = lgw_get_trigcnt(&trig_tstamp);
             pthread_mutex_unlock(&mx_concent);
             if (prev_trig_tstamp != trig_tstamp) {
-                double secs;
                 pps_cnt++;
-                //struct timespec now;
-                if (clock_gettime (CLOCK_MONOTONIC, &pps_host_time) == -1)
-                    perror ("clock_gettime");
-                //printf("pps @ %lu.%09lu\n", pps_host_time.tv_sec, pps_host_time.tv_nsec);
+
+            if (clock_gettime (CLOCK_MONOTONIC, &pps_host_time) == -1)
+                perror ("clock_gettime");
+            //printf("pps @ %lu.%09lu\n", pps_host_time.tv_sec, pps_host_time.tv_nsec);
+#if 0
+                double secs;
+                struct timespec now;
                 secs = difftimespec(pps_host_time, uart_host_time);
-                /*if (secs > 0.97 || secs < 0.85)
+                if (secs > 0.97 || secs < 0.85)
                     printf("[31m");
-                printf("pps: %f since uart, time:%lu.%09lu, %02x[0m\n", secs, time_ptr->tv_sec, time_ptr->tv_nsec, pps_cnt);*/
+                printf("pps: %f since uart, time:%lu.%09lu, %02x[0m\n", secs, time_ptr->tv_sec, time_ptr->tv_nsec, pps_cnt);
+#endif /* #if 0 */
                 pps(trig_tstamp);
             }
 #endif    /* ENABLE_CLASS_B */
@@ -1308,7 +1320,7 @@ void thread_gps(void)
         latest_msg = lgw_parse_nmea(serial_buff, sizeof(serial_buff));
 
         if (latest_msg == NMEA_RMC || latest_msg == NMEA_GGA ) { 
-            double secs;
+            //double secs;
             if (clock_gettime (CLOCK_MONOTONIC, &uart_host_time) == -1)
                 perror ("clock_gettime");
             /* get UTC time for synchronization */
@@ -1317,7 +1329,7 @@ void thread_gps(void)
                 MSG("WARNING: [gps] could not get UTC time from GPS\n");
                 continue;
             }
-            secs = difftimespec(uart_host_time, pps_host_time);
+            //secs = difftimespec(uart_host_time, pps_host_time);
             //printf("uart: %f since pps, ubx:%lu.%09lu[0m\n", secs, g_utc_time.tv_sec, g_utc_time.tv_nsec);
         } 
 

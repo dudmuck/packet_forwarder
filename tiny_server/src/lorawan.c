@@ -191,6 +191,10 @@ typedef struct {
     } ping_slot_info;
     bool class_b_en;
     uint16_t ping_offset;
+    uint16_t ping_period;
+    uint16_t next_occurring_ping;
+
+    uint8_t user_downlink_length;   // 0 = no downlink to be sent
 
     struct _devNonce_list* devNonce_list;
 } mote_t;
@@ -248,14 +252,11 @@ time_t devnonce_experation = 600; // in seconds
 #define DEVNONCE_HISTORY_SIZE   20  /* how many devNonce to keep */
 
 uint8_t user_downlink[128];
-int user_downlink_length = -1;
 uint32_t lgw_trigcnt_at_next_beacon;
-bool beacon_valid = false;
 
 mtype_e user_dowlink_mtype = MTYPE_UNCONF_DN;
 uint8_t ping_downlink_port = 2; // non-zero default
-struct lgw_pkt_tx_s ping_tx_pkt;
-mote_t* ping_mote = NULL;
+mote_t* tx_busy_mote = NULL;    // if !NULL, downlink scheduled for this mote
 
 #ifdef ENABLE_CLASS_B
 BeaconContext_t BeaconCtx;
@@ -439,26 +440,7 @@ _send_downlink(struct lgw_pkt_tx_s* tx_pkt, mote_t* mote)
 }
 
 #ifdef ENABLE_CLASS_B
-void
-lorawan_service_ping()
-{
-    if (ping_tx_pkt.freq_hz == 0)
-        return;   // nothing to send
-
-    /* send ping if it had to be postponed */
-    uint16_t use_pingslot = ping_mote->ping_offset;
-    uint32_t ping_offset_us = use_pingslot * 30000;
-    float ping_offset_s = use_pingslot * 0.03;
-    ping_tx_pkt.count_us = trigcnt_pingslot_zero;
-    ping_tx_pkt.count_us += ping_offset_us + (g_sx1301_ppm_err * ping_offset_s);
-    printf("use_pingslot:%u, ping_offset_us:%u, ping_offset_s:%f\n", use_pingslot, ping_offset_us, ping_offset_s);
-    if (_send_downlink(&ping_tx_pkt, ping_mote) == 0) {
-        /* mark as sent */
-        user_downlink_length = -1;
-        ping_tx_pkt.freq_hz = 0;
-    } else
-        printf("service-ping _send_downlink() failed\n");
-}
+uint64_t last_beaconTime;
 
 void
 lorawan_update_ping_offsets(uint64_t beaconTime)
@@ -467,27 +449,27 @@ lorawan_update_ping_offsets(uint64_t beaconTime)
 
     while (mote_list_ptr != NULL) {
         mote_t* mote = &mote_list_ptr->mote;
-        uint32_t ping_nb = 128 / (1 << mote->ping_slot_info.bits.periodicity);
-        uint32_t ping_period = BEACON_WINDOW_SLOTS / ping_nb;
         if (mote->class_b_en) {
             LoRaMacBeaconComputePingOffset(
                 beaconTime,
                 mote->dev_addr,
-                ping_period,
+                mote->ping_period,
                 &mote->ping_offset
             );
 #if UINTPTR_MAX == 0xffffffff
 /* 32-bit */
-    printf("ping offset: %llu, %08x, %u, %u\n", beaconTime, mote->dev_addr, ping_period, mote->ping_offset);
+    printf("ping offset: %llu, %08x, %u, %u\n", beaconTime, mote->dev_addr, mote->ping_period, mote->ping_offset);
 #elif UINTPTR_MAX == 0xffffffffffffffff
 /* 64-bit */
-    printf("ping offset: %lu, %08x, %u, %u\n", beaconTime, mote->dev_addr, ping_period, mote->ping_offset);
+    printf("ping offset: %lu, %08x, %u, %u\n", beaconTime, mote->dev_addr, mote->ping_period, mote->ping_offset);
 #else
 /* wtf */
 #endif
         }
         mote_list_ptr = mote_list_ptr->next;
     }
+
+    last_beaconTime = beaconTime;
 }
 #endif  /* ENABLE_CLASS_B */
 
@@ -573,6 +555,7 @@ void LoRa_GenerateJoinFrameIntegrityCode(const uint8_t key[], uint8_t const inpu
 static int
 send_downlink_classA(struct lgw_pkt_tx_s* tx_pkt, mote_t* mote, uint32_t rx_count_us)
 {
+    int ret;
     printf(" send_downlink_classA rx%d\n", dl_rxwin);
     if (dl_rxwin == 1) {
         tx_pkt->count_us = rx_count_us + RECEIVE_DELAY1_us;
@@ -580,7 +563,11 @@ send_downlink_classA(struct lgw_pkt_tx_s* tx_pkt, mote_t* mote, uint32_t rx_coun
         tx_pkt->count_us = rx_count_us + RECEIVE_DELAY2_us;
     }
 
-    return _send_downlink(tx_pkt, mote);
+    ret = _send_downlink(tx_pkt, mote);
+    if (ret == 0)
+        tx_busy_mote = mote;
+
+    return ret;
 }
 
 static void
@@ -619,14 +606,13 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf
                  // one payload byte: periocity and datarate
                 mote->ping_slot_info.octet = rx_cmd_buf[rx_cmd_buf_idx++];
                 mote->class_b_en = true;
+                uint32_t ping_nb = 128 / (1 << mote->ping_slot_info.bits.periodicity);
+                mote->ping_period = BEACON_WINDOW_SLOTS / ping_nb;
+                LoRaMacBeaconComputePingOffset(last_beaconTime, mote->dev_addr, mote->ping_period, &mote->ping_offset);
                 *tx_fopts_ptr++ = SRV_MAC_PING_SLOT_INFO_ANS;  // 0x10
                 break;
             case MOTE_MAC_BEACON_TIMING_REQ:    // 0x12
                 /* no payload in request */
-                if (!beacon_valid) {
-                    printf("[31mMOTE_MAC_BEACON_TIMING_REQ !beacon_valid[0m\n");
-                    break;
-                }
                 diff = (float)(lgw_trigcnt_at_next_beacon - rx_pkt->count_us) / 30000.0;
                 i_diff = (int)floor(diff);
                 printf("MOTE_MAC_BEACON_TIMING_REQ slots:%.1f=%.1fms (int:%u,%u)", diff, diff*30.0, i_diff, i_diff*30);
@@ -759,7 +745,7 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
     }
 
     if (tx_fhdr->FCtrl.dlBits.FOptsLen > 0 || rx_mhdr->bits.MType == MTYPE_CONF_UP ||
-        user_downlink_length != -1)
+        mote->user_downlink_length > 0)
     {
         /* something to send via downlink */
         if (rx_mhdr->bits.MType == MTYPE_CONF_UP)
@@ -767,18 +753,18 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
         else
             tx_fhdr->FCtrl.dlBits.ACK = 0;
 
-        if (user_downlink_length != -1) {
+        if (mote->user_downlink_length > 0) {
             /* add user payload */
             int txo = sizeof(mhdr_t) + sizeof(fhdr_t) + tx_fhdr->FCtrl.dlBits.FOptsLen;
             uint8_t* tx_fport_ptr = &tx_pkt.payload[txo];
             uint8_t* txFRMPayload = &tx_pkt.payload[txo+1];
-            LoRa_EncryptPayload(mote->app_session_key, user_downlink, user_downlink_length, mote->dev_addr, false, mote->FCntDown, txFRMPayload);
+            LoRa_EncryptPayload(mote->app_session_key, user_downlink, mote->user_downlink_length, mote->dev_addr, false, mote->FCntDown, txFRMPayload);
             if (rx_fport_ptr != NULL)
                 *tx_fport_ptr = *rx_fport_ptr;
             else
                 *tx_fport_ptr = DEFAULT_DOWNLINK_PORT;
 
-            tx_pkt.size = tx_fhdr->FCtrl.dlBits.FOptsLen + user_downlink_length + 1; // +1 for fport
+            tx_pkt.size = tx_fhdr->FCtrl.dlBits.FOptsLen + mote->user_downlink_length + 1; // +1 for fport
             tx_pkt.payload[0] = user_dowlink_mtype << 5; // MHDR
         } else {
             /* downlink not triggered by user_downlink */
@@ -790,7 +776,7 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
         if (send_downlink_classA(&tx_pkt, mote, rx_pkt->count_us) < 0)
             printf("send_downlink_classA() failed\n");
         else
-            user_downlink_length = -1;  // mark as sent
+            mote->user_downlink_length = 0;  // mark as sent
     }
 }
 
@@ -828,6 +814,11 @@ void SendJoinComplete(uint16_t deviceNonce, uint8_t firstReceiveWindowDataRateof
     uint8_t uncyphered[LORA_MAXDATABYTES];
     uint8_t* current = uncyphered;
     uint32_t applicationNonce = rand() & 0xffffff;  // 24bit
+
+    if (tx_busy_mote != NULL) {
+        printf("[31mSendJoinComplete(): tx busy[0m\n");
+        return;
+    }
 
     GenerateSessionKey(true, mote->app_key, network_id, applicationNonce, deviceNonce, networkSessionKey);
     memcpy(mote->network_session_key, networkSessionKey, LORA_CYPHERKEYBYTES);
@@ -892,8 +883,9 @@ void SendJoinComplete(uint16_t deviceNonce, uint8_t firstReceiveWindowDataRateof
     int i = lgw_send(tx_pkt);
     pthread_mutex_unlock(&mx_concent);
     if (i == LGW_HAL_ERROR) {
-        printf("SendJoinComplete(): lgw_send() failed\n");
-    }
+        printf("[31mSendJoinComplete(): lgw_send() failed[0m\n");
+    } else
+        tx_busy_mote = mote;
 
     GenerateSessionKey(false, mote->app_key, network_id, applicationNonce, deviceNonce, mote->app_session_key);
     //print_octets("app_session_key", mote->app_session_key, LORA_CYPHERKEYBYTES);
@@ -1002,6 +994,101 @@ parse_join_req(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
 
 }
 
+void
+get_soonest_mote(mote_t** m)
+{
+    struct _mote_list* mote_list_ptr;
+
+    /* get current pingslot */
+    struct timespec host_time_now;
+    double seconds_since_beacon;
+    int16_t now_pingslot;
+    if (clock_gettime (CLOCK_MONOTONIC, &host_time_now) == -1)
+        perror ("clock_gettime");
+    seconds_since_beacon = difftimespec(host_time_now, host_time_at_beacon);
+    printf("seconds_since_beacon:%.2f\n", seconds_since_beacon);
+    now_pingslot = (int16_t)ceil((seconds_since_beacon - 2.12) / 0.03);
+    printf("now_pingslot:%d\r\n", now_pingslot);
+
+    /* update next occurring ping in motes */
+    for (mote_list_ptr = mote_list; mote_list_ptr != NULL; mote_list_ptr = mote_list_ptr->next) {
+        mote_t* mote = &mote_list_ptr->mote;
+        if (mote->class_b_en) {
+            printf("class_b mote %08x ", mote->dev_addr);
+            if (mote->ping_offset > 0) {
+                uint16_t _use_pingslot = mote->ping_offset;
+                printf("ping_offset:%u ",  mote->ping_offset);
+                while (_use_pingslot < now_pingslot)
+                    _use_pingslot += mote->ping_period;
+                printf(" use_pingslot:%u", _use_pingslot);
+                mote->next_occurring_ping = _use_pingslot;
+            } else
+                printf("ping_offset==0");
+            printf("\n");
+        }
+    }
+
+    /* find class-B mote with soonest occurring ping slot */
+    uint16_t soonest_occurring_ping = 4096;
+    *m = NULL;
+    for (mote_list_ptr = mote_list; mote_list_ptr != NULL; mote_list_ptr = mote_list_ptr->next) {
+        mote_t* mote = &mote_list_ptr->mote;
+        if (mote->class_b_en && mote->user_downlink_length != 0 && mote->next_occurring_ping < soonest_occurring_ping)  {
+            *m = &mote_list_ptr->mote;
+            soonest_occurring_ping = mote->next_occurring_ping;
+            //printf("soonest mote %08x: %u\r\n", (*m)->dev_addr, soonest_occurring_ping);
+        }
+        
+    }
+}
+
+void
+send_downlink_ping(mote_t *m)
+{
+    /*** prepare downlink tx ***/
+    struct lgw_pkt_tx_s ping_tx_pkt;
+    ping_tx_pkt.freq_hz = PINGSLOT_CHANNEL_FREQ(0); // TODO use address in idle state
+    ping_tx_pkt.bandwidth = data_rates[m->ping_slot_info.bits.datarate].bw;
+    ping_tx_pkt.datarate = data_rates[m->ping_slot_info.bits.datarate].bps_sf;
+    ping_tx_pkt.payload[0] = user_dowlink_mtype << 5; // MHDR
+    fhdr_t* tx_fhdr = (fhdr_t*)&ping_tx_pkt.payload[1];
+
+    tx_fhdr->FCtrl.octet = 0;
+    tx_fhdr->FCtrl.dlBits.FOptsLen = 0;
+    ping_tx_pkt.size = tx_fhdr->FCtrl.dlBits.FOptsLen + m->user_downlink_length + 1; // +1 for fport
+
+    int txo = sizeof(mhdr_t) + sizeof(fhdr_t) + tx_fhdr->FCtrl.dlBits.FOptsLen;
+    uint8_t* tx_fport_ptr = &ping_tx_pkt.payload[txo];
+    uint8_t* txFRMPayload = &ping_tx_pkt.payload[txo+1];
+
+    LoRa_EncryptPayload(
+        /* const uint8_t key[] */ m->app_session_key,
+        /* uint8_t const in[] */ user_downlink,
+        /* uint16_t inputDataLength */ m->user_downlink_length,
+        /* uint32_t address */ m->dev_addr,
+        /* bool up */ false,
+        /* uint32_t sequenceNumber */ m->FCntDown,
+        /* uint8_t out[] */ txFRMPayload
+    );
+
+    *tx_fport_ptr = ping_downlink_port;
+    uint32_t ping_offset_us = m->next_occurring_ping * 30000;
+    float ping_offset_s = m->next_occurring_ping * 0.03;
+    ping_tx_pkt.count_us = trigcnt_pingslot_zero;
+    ping_tx_pkt.count_us += ping_offset_us + (g_sx1301_ppm_err * ping_offset_s);
+    printf("use_pingslot:%u, ping_offset_us:%u, ping_offset_s:%f\n", m->next_occurring_ping, ping_offset_us, ping_offset_s);
+    //printf("err_us:%d
+    if (m->next_occurring_ping >= BEACON_WINDOW_SLOTS) {
+        /* cant be sent in this beacon period */
+        printf("send in next beacon window\n");
+        return;
+    }
+
+    if (_send_downlink(&ping_tx_pkt, m) == 0) {
+        tx_busy_mote = m;
+    } else
+        printf("ping _send_downlink() failed\n");
+}
 
 void
 lorawan_parse_uplink(struct lgw_pkt_rx_s *p)
@@ -1058,9 +1145,9 @@ lorawan_parse_uplink(struct lgw_pkt_rx_s *p)
     } else if (mhdr->bits.MType == MTYPE_UNCONF_UP || mhdr->bits.MType == MTYPE_CONF_UP) {
         fhdr_t *fhdr = (fhdr_t*)&p->payload[1];
         if (mhdr->bits.MType == MTYPE_UNCONF_UP)
-            printf("MTYPE_UNCONF_UP\n");
+            printf("MTYPE_UNCONF_UP\nup-");
         else if (mhdr->bits.MType == MTYPE_CONF_UP)
-            printf("MTYPE_CONF_UP\n");
+            printf("MTYPE_CONF_UP\nup-");
 
         if (fhdr->FCtrl.ulBits.classB)
             printf("classB ");
@@ -1140,6 +1227,15 @@ void _print_tx_status(uint8_t tx_status)
             break;
         case TX_FREE:
             printf("TX_FREE\n");
+            if (tx_busy_mote != NULL) {
+                mote_t* soonest_mote;
+                tx_busy_mote->user_downlink_length = 0; // flag as tx complete
+                tx_busy_mote = NULL;
+                /* is there another class-b mote with downlink to send? */
+                get_soonest_mote(&soonest_mote);
+                if (soonest_mote != NULL)
+                    send_downlink_ping(soonest_mote);
+            }
             break;
         case TX_EMITTING:
             printf("TX_EMITTING\n");
@@ -1156,10 +1252,11 @@ void _print_tx_status(uint8_t tx_status)
 void
 lorawan_kbd_input()
 {
+    int stdin_len;
     uint8_t tx_status;
     static uint8_t prev_tx_status = TX_OFF;
 #ifdef ENABLE_CLASS_B
-    uint32_t trig_tstamp;
+    //uint32_t trig_tstamp;
 #endif    /* ENABLE_CLASS_B */
 
     lgw_status(TX_STATUS, &tx_status);
@@ -1171,92 +1268,40 @@ lorawan_kbd_input()
     if (!inputAvailable())
         return;
 
-    user_downlink_length = read(STDIN_FILENO, user_downlink, sizeof(user_downlink));
-    printf("user_downlink:%d,%s\n", user_downlink_length, user_downlink);
+    stdin_len = read(STDIN_FILENO, user_downlink, sizeof(user_downlink));
+    printf("user_downlink:%d,%s\n", stdin_len, user_downlink);
 
-    if (cmd_parse(user_downlink, user_downlink_length-1))
+    if (cmd_parse(user_downlink, stdin_len-1))
         return; // user command, not payload
 
 #ifdef ENABLE_CLASS_B
-    /* any class-B motes? */
-    mote_t* mote = NULL;
-    struct _mote_list* mote_list_ptr = mote_list;
-    while (mote_list_ptr != NULL) {
-        if (mote_list_ptr->mote.class_b_en) {
-            /* send only to the first B-mote */
-            mote = &mote_list_ptr->mote;
-            break;
-        }
+    struct _mote_list* mote_list_ptr;
+    //send_ping_single_mote();
 
-        mote_list_ptr = mote_list_ptr->next;
-    }
-
-    if (mote == NULL) {
-        printf("no class-B motes\n");
-        return; /* no class-B mote existing */
-    }
-
-    /* find the pingslot occuring now */
-    struct timespec now;
-    if (clock_gettime (CLOCK_MONOTONIC, &now) == -1)
-        perror ("clock_gettime");
-
-
-    pthread_mutex_lock(&mx_concent);
-    lgw_get_trigcnt(&trig_tstamp);  // sx1301 time at last pps (up to 33 pingslots ago)
-    pthread_mutex_unlock(&mx_concent);
-    uint32_t us_since_pingslot_zero = trig_tstamp - trigcnt_pingslot_zero;
-    uint16_t current_pingslot = us_since_pingslot_zero / 30000;
-    printf("current_pingslot :%u\n", current_pingslot);
-    current_pingslot += 6;    // give some time margin to load packet into transmitter
-
-    ping_mote = mote;
-    ping_tx_pkt.freq_hz = PINGSLOT_CHANNEL_FREQ(0); // TODO use address in idle state
-    ping_tx_pkt.bandwidth = data_rates[ping_mote->ping_slot_info.bits.datarate].bw;
-    ping_tx_pkt.datarate = data_rates[ping_mote->ping_slot_info.bits.datarate].bps_sf;
-    ping_tx_pkt.payload[0] = user_dowlink_mtype << 5; // MHDR
-    fhdr_t* tx_fhdr = (fhdr_t*)&ping_tx_pkt.payload[1];
-
-    tx_fhdr->FCtrl.octet = 0;
-    tx_fhdr->FCtrl.dlBits.FOptsLen = 0;
-    ping_tx_pkt.size = tx_fhdr->FCtrl.dlBits.FOptsLen + user_downlink_length + 1; // +1 for fport
-
-    int txo = sizeof(mhdr_t) + sizeof(fhdr_t) + tx_fhdr->FCtrl.dlBits.FOptsLen;
-    uint8_t* tx_fport_ptr = &ping_tx_pkt.payload[txo];
-    uint8_t* txFRMPayload = &ping_tx_pkt.payload[txo+1];
-
-    LoRa_EncryptPayload(ping_mote->app_session_key, user_downlink, user_downlink_length, ping_mote->dev_addr, false, mote->FCntDown, txFRMPayload);
-
-    *tx_fport_ptr = ping_downlink_port;
-
-    uint32_t ping_nb = 128 / (1 << ping_mote->ping_slot_info.bits.periodicity);
-    uint32_t ping_period = BEACON_WINDOW_SLOTS / ping_nb;
-    uint16_t use_pingslot = ping_mote->ping_offset;
-    while (use_pingslot < current_pingslot)
-        use_pingslot += ping_period;
-
-    uint32_t ping_offset_us = use_pingslot * 30000;
-    float ping_offset_s = use_pingslot * 0.03;
-    ping_tx_pkt.count_us = trigcnt_pingslot_zero;
-    ping_tx_pkt.count_us += ping_offset_us + (g_sx1301_ppm_err * ping_offset_s);
-    printf("mote-ping_period:%u use_pingslot:%u, ping_offset_us:%u, ping_offset_s:%f\n", ping_period, use_pingslot, ping_offset_us, ping_offset_s);
-    //printf("err_us:%d
-    if (use_pingslot >= BEACON_WINDOW_SLOTS) {
-        /* cant be sent in this beacon period */
-        printf("send in next beacon window\n");
+    if (tx_busy_mote != NULL) {
+        printf("tx busy\n");
         return;
     }
 
-    if (_send_downlink(&ping_tx_pkt, ping_mote) == 0) {
-        /* mark as sent */
-        user_downlink_length = -1;
-        ping_tx_pkt.freq_hz = 0;
+    /* flag downlink into all class_b motes */
+    for (mote_list_ptr = mote_list; mote_list_ptr != NULL; mote_list_ptr = mote_list_ptr->next) {
+        mote_t* mote = &mote_list_ptr->mote;
+        if (mote->class_b_en)
+            mote->user_downlink_length = stdin_len;
+    }
 
-        lgw_status(TX_STATUS, &tx_status);
-        _print_tx_status(tx_status);
-        prev_tx_status = tx_status;
-    } else
-        printf("ping _send_downlink() failed\n");
+
+    mote_t* soonest_mote = NULL;
+    get_soonest_mote(&soonest_mote);
+
+    if (soonest_mote == NULL) {
+        printf("no mote to ping\r\n");
+        return;
+    }
+
+    //printf("soonest mote:%08x, ping at %u\r\n", soonest_mote->dev_addr, soonest_mote->next_occurring_ping);
+
+    send_downlink_ping(soonest_mote);
 #endif    /* ENABLE_CLASS_B */
 }
 

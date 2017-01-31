@@ -98,7 +98,7 @@ uint8_t BeaconChannel( uint32_t devAddr );
 #define DR_6                                        6  // SF7  - BW250
 #define DR_7                                        7  // FSK
 
-#define BEACON_SIZE         19
+#define BEACON_SIZE         17
 #define BEACON_CHANNEL_FREQ( )                      ( 922400000 )
 #define BEACON_BW           BW_125KHZ
 #define BEACON_SF           DR_LORA_SF9

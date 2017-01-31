@@ -24,15 +24,14 @@ extern uint8_t tx_rf_chain;    // written by sx1301 conf
 #ifdef ENABLE_CLASS_B
 void lorawan_update_ping_offsets(uint64_t beaconTime);
 extern uint32_t lgw_trigcnt_at_next_beacon;
-extern bool beacon_valid;
 extern float g_sx1301_ppm_err;  // from tiny server
 extern uint32_t trigcnt_pingslot_zero;  // from tiny server
-void lorawan_service_ping(void);
 extern bool beacon_guard;  // from tiny server
 extern int skip_beacon_cnt;
 #endif	/* ENABLE_CLASS_B */
 
 extern bool verbose;    // from tiny server
+extern struct timespec host_time_at_beacon;    // from tiny server
 
 
 double difftimespec(struct timespec end, struct timespec beginning);  // from tiny server
