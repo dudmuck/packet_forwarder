@@ -932,7 +932,7 @@ load_beacon(uint32_t seconds)
         /* cause beacon to fail by sending on wrong frequency */
         printf("skip_beacon_cnt:%d\n", skip_beacon_cnt);
         skip_beacon_cnt--;
-        tx_pkt.freq_hz = BEACON_CHANNEL_FREQ() + 500000;
+        tx_pkt.freq_hz = BEACON_CHANNEL_FREQ() + 450000;
     } else {
         tx_pkt.freq_hz = BEACON_CHANNEL_FREQ();
     }
