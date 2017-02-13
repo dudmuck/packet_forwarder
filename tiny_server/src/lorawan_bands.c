@@ -68,6 +68,15 @@ uint8_t BeaconChannel( uint32_t devAddr )
 {
     uint32_t frequency = 0;
 
+    if (BeaconCtx.BeaconTime == 0) {
+        printf("BeaconCtx.BeaconTime == 0\n");
+        return 0;
+    }
+    if (BeaconCtx.Cfg.Interval == 0) {
+        printf("BeaconCtx.Cfg.Interval == 0\n");
+        return 0;
+    }
+
     frequency = devAddr + ( BeaconCtx.BeaconTime / ( BeaconCtx.Cfg.Interval / 1000 ) );
     printf("[31mBeaconChannel() frequency:%u, devAddr:%08x, BeaconCtx.BeaconTime:%x, BeaconCtx.Cfg.Interval:%u[0m\n", frequency, devAddr, BeaconCtx.BeaconTime, BeaconCtx.Cfg.Interval);
     return ( ( uint8_t )( frequency % 8 ) );

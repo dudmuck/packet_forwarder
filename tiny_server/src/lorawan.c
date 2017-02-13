@@ -1003,6 +1003,12 @@ get_soonest_mote(mote_t** m)
     struct timespec host_time_now;
     double seconds_since_beacon;
     int16_t now_pingslot;
+
+    if (host_time_at_beacon.tv_sec == 0) {
+        printf("get_soonest_mote(): beacon not sent\n");
+        *m = NULL;
+        return;
+    }
     if (clock_gettime (CLOCK_MONOTONIC, &host_time_now) == -1)
         perror ("clock_gettime");
     seconds_since_beacon = difftimespec(host_time_now, host_time_at_beacon);

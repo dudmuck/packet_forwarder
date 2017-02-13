@@ -1084,6 +1084,9 @@ void thread_up(void) {
     bool send_report = false;
 
 #ifdef ENABLE_CLASS_B
+    host_time_at_beacon.tv_sec = 0; // first beacon net yet sent
+    host_time_at_beacon.tv_nsec = 0;    // first beacon net yet sent
+
     /* block here until first pps */
     pthread_mutex_lock(&mx_concent);
     i = lgw_get_trigcnt(&first_trig_tstamp);
