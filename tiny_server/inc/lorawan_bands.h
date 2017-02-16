@@ -106,5 +106,6 @@ uint8_t BeaconChannel( uint32_t devAddr );
 #define RX_WND_2_CHANNEL               { 921400000, DR_2 }  /* TODO add RX2 for join accept */
 
 #define PINGSLOT_CHANNEL_FREQ( x )                  922200000
+#define PING_SLOT_DATARATE          DR_3
 
 #endif

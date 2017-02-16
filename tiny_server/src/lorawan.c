@@ -183,9 +183,8 @@ typedef struct {
 
     union {
         struct {
-            uint8_t datarate: 4;    // 0 to 3
-            uint8_t periodicity: 4;    // 4 to 6
-            uint8_t rfu: 1;    // 7
+            uint8_t periodicity: 3;    // 0 to 2
+            uint8_t rfu: 5;    // 3 to 7
         } bits;
         uint8_t octet;
     } ping_slot_info;
@@ -1054,8 +1053,8 @@ send_downlink_ping(mote_t *m)
     /*** prepare downlink tx ***/
     struct lgw_pkt_tx_s ping_tx_pkt;
     ping_tx_pkt.freq_hz = PINGSLOT_CHANNEL_FREQ(0); // TODO use address in idle state
-    ping_tx_pkt.bandwidth = data_rates[m->ping_slot_info.bits.datarate].bw;
-    ping_tx_pkt.datarate = data_rates[m->ping_slot_info.bits.datarate].bps_sf;
+    ping_tx_pkt.bandwidth = data_rates[PING_SLOT_DATARATE].bw;
+    ping_tx_pkt.datarate = data_rates[PING_SLOT_DATARATE].bps_sf;
     ping_tx_pkt.payload[0] = user_dowlink_mtype << 5; // MHDR
     fhdr_t* tx_fhdr = (fhdr_t*)&ping_tx_pkt.payload[1];
 
