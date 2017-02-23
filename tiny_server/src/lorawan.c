@@ -36,9 +36,7 @@
 #define STD_LORA_PREAMB 8
 
 #define LORA_ENCRYPTIONBLOCKBYTES       16
-#define LORA_CYPHERKEYBYTES             16
 #define LORA_AUTHENTICATIONBLOCKBYTES   16
-#define LORA_EUI_LENGTH                 8
 #define LORA_FRAMEMICBYTES              4
 
 #define LORA_MAXFRAMELENGTH             235
@@ -48,114 +46,8 @@
 #define LORA_MAXDATABYTES    (LORA_MAXFRAMELENGTH - (LORA_MACHEADERLENGTH + LORA_MINDATAHEADERLENGTH + LORA_PORTLENGTH + LORA_FRAMEMICBYTES)) //excluding port
 #define LORA_NETWORKADDRESSBITS         25
 
-typedef enum eLoRaMacMoteCmd
-{
-    /*!
-     * LinkCheckReq
-     */
-    MOTE_MAC_LINK_CHECK_REQ          = 0x02,
-    /*!
-     * LinkADRAns
-     */
-    MOTE_MAC_LINK_ADR_ANS            = 0x03,
-    /*!
-     * DutyCycleAns
-     */
-    MOTE_MAC_DUTY_CYCLE_ANS          = 0x04,
-    /*!
-     * RXParamSetupAns
-     */
-    MOTE_MAC_RX_PARAM_SETUP_ANS      = 0x05,
-    /*!
-     * DevStatusAns
-     */
-    MOTE_MAC_DEV_STATUS_ANS          = 0x06,
-    /*!
-     * NewChannelAns
-     */
-    MOTE_MAC_NEW_CHANNEL_ANS         = 0x07,
-    /*!
-     * RXTimingSetupAns
-     */
-    MOTE_MAC_RX_TIMING_SETUP_ANS     = 0x08,
-    /*!
-     * PingSlotInfoReq
-     */
-#ifdef ENABLE_CLASS_B
-    MOTE_MAC_PING_SLOT_INFO_REQ      = 0x10,
-    /*!
-     * PingSlotFreqAns
-     */
-    MOTE_MAC_PING_SLOT_FREQ_ANS      = 0x11,
-    /*!
-     * BeaconTimingReq
-     */
-    MOTE_MAC_BEACON_TIMING_REQ       = 0x12,
-    /*!
-     * BeaconFreqAns
-     */
-    MOTE_MAC_BEACON_FREQ_ANS         = 0x13,
-#endif  /* ENABLE_CLASS_B */
-}LoRaMacMoteCmd_t;
 
-typedef enum eLoRaMacSrvCmd
-{
-    /*!
-     * LinkCheckAns
-     */
-    SRV_MAC_LINK_CHECK_ANS           = 0x02,
-    /*!
-     * LinkADRReq
-     */
-    SRV_MAC_LINK_ADR_REQ             = 0x03,
-    /*!
-     * DutyCycleReq
-     */
-    SRV_MAC_DUTY_CYCLE_REQ           = 0x04,
-    /*!
-     * RXParamSetupReq
-     */
-    SRV_MAC_RX_PARAM_SETUP_REQ       = 0x05,
-    /*!
-     * DevStatusReq
-     */
-    SRV_MAC_DEV_STATUS_REQ           = 0x06,
-    /*!
-     * NewChannelReq
-     */
-    SRV_MAC_NEW_CHANNEL_REQ          = 0x07,
-    /*!
-     * RXTimingSetupReq
-     */
-    SRV_MAC_RX_TIMING_SETUP_REQ      = 0x08,
-    /*!
-     * PingSlotInfoAns
-     */
-#ifdef ENABLE_CLASS_B
-    SRV_MAC_PING_SLOT_INFO_ANS       = 0x10,
-    /*!
-     * PingSlotChannelReq
-     */
-    SRV_MAC_PING_SLOT_CHANNEL_REQ    = 0x11,
-    /*!
-     * BeaconTimingAns
-     */
-    SRV_MAC_BEACON_TIMING_ANS        = 0x12,
-    /*!
-     * BeaconFreqReq
-     */
-    SRV_MAC_BEACON_FREQ_REQ          = 0x13,
-#endif  /* ENABLE_CLASS_B */
-}LoRaMacSrvCmd_t;
-
-typedef union {
-    struct {
-        uint8_t major   : 2;    // 0 1
-        uint8_t rfu     : 3;    // 2 3 4
-        uint8_t MType   : 3;    // 5 6 7
-    } bits;
-    uint8_t octet;
-} mhdr_t;
+#define NULL_SNR        -30
 
 typedef struct {
     mhdr_t mhdr;
@@ -169,34 +61,6 @@ struct _devNonce_list {
     time_t last_seen;
     struct _devNonce_list* next;
 };
-
-typedef struct {
-    uint8_t app_eui[LORA_EUI_LENGTH];
-    uint8_t dev_eui[LORA_EUI_LENGTH];
-    uint8_t app_key[LORA_CYPHERKEYBYTES];
-
-    uint32_t dev_addr;
-    uint8_t network_session_key[LORA_CYPHERKEYBYTES];
-    uint8_t app_session_key[LORA_CYPHERKEYBYTES];
-
-    uint16_t FCntDown;
-
-    union {
-        struct {
-            uint8_t periodicity: 3;    // 0 to 2
-            uint8_t rfu: 5;    // 3 to 7
-        } bits;
-        uint8_t octet;
-    } ping_slot_info;
-    bool class_b_en;
-    uint16_t ping_offset;
-    uint16_t ping_period;
-    uint16_t next_occurring_ping;
-
-    uint8_t user_downlink_length;   // 0 = no downlink to be sent
-
-    struct _devNonce_list* devNonce_list;
-} mote_t;
 
 struct _mote_list {
     mote_t mote;
@@ -216,31 +80,7 @@ typedef enum {
     MTYPE_P,//7
 } mtype_e;
 
-
-typedef union {
-    struct {
-        uint8_t FOptsLen        : 4;    // 0 1 2 3
-        uint8_t FPending        : 1;    // 4 
-        uint8_t ACK             : 1;    // 5
-        uint8_t ADCACKReq       : 1;    // 6
-        uint8_t ADR             : 1;    // 7
-    } dlBits;   // downlink  (gwtx)
-    struct {
-        uint8_t FOptsLen        : 4;    // 0 1 2 3
-        uint8_t classB          : 1;    // 4    unused in classA
-        uint8_t ACK             : 1;    // 5
-        uint8_t ADCACKReq       : 1;    // 6
-        uint8_t ADR             : 1;    // 7
-    } ulBits;   // uplink   (gwrx)
-    uint8_t octet;
-} FCtrl_t;
-
 #define DEVADDR_NONE        0xffffffff
-typedef struct {
-    uint32_t DevAddr;
-    FCtrl_t FCtrl;
-    uint16_t FCnt;
-} __attribute__((packed)) fhdr_t;
 
 uint32_t network_id;
 uint32_t networkAddress = 0;  // bits 24..0 of DevAddr, for join accept
@@ -569,24 +409,80 @@ send_downlink_classA(struct lgw_pkt_tx_s* tx_pkt, mote_t* mote, uint32_t rx_coun
     return ret;
 }
 
-static void
-parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf, uint8_t rx_cmd_buf_len, struct lgw_pkt_tx_s* tx_pkt)
+void put_queue_mac_cmds(mote_t* mote, uint8_t cmd_len, uint8_t* cmd_buf)
 {
-    uint8_t* tx_fopts_ptr = &tx_pkt->payload[sizeof(mhdr_t) + sizeof(fhdr_t)];
-    uint8_t* tx_start_fopts_ptr = tx_fopts_ptr;
-    uint8_t rx_cmd_buf_idx = 0;
+    int i;
+    uint8_t* this_cmd_buf = mote->macCmd_queue[mote->macCmd_queue_in_idx];
+    this_cmd_buf[0] = cmd_len;
+
+    printf("put_queue_mac_cmds %u: ", cmd_len);
+    for (i = 0; i < cmd_len; i++) {
+        this_cmd_buf[i+1] = cmd_buf[i];
+        printf("%02x ", cmd_buf[i]);
+    }
+    printf("\r\n");
+
+    if (++mote->macCmd_queue_in_idx == MAC_CMD_QUEUE_SIZE)
+        mote->macCmd_queue_in_idx = 0;
+
+    if (mote->macCmd_queue_in_idx == mote->macCmd_queue_out_idx) {
+        printf("macCmd_queue full\n");
+        exit(EXIT_FAILURE);
+    }
+}
+
+void get_queued_mac_cmds(mote_t* mote, struct lgw_pkt_tx_s* tx_pkt)
+{
     fhdr_t* tx_fhdr = (fhdr_t*)&tx_pkt->payload[1];
+    uint8_t* tx_fopts_ptr;
+
+    tx_fhdr->FCtrl.octet = 0;
+    tx_fhdr->FCtrl.dlBits.FOptsLen = 0;
+
+    if (mote->macCmd_queue_out_idx == mote->macCmd_queue_in_idx)
+        return; // nothing to put
+
+    tx_fopts_ptr = &tx_pkt->payload[sizeof(mhdr_t) + sizeof(fhdr_t)];
+    printf("get_queued_mac_cmds ");
+
+    while (mote->macCmd_queue_out_idx != mote->macCmd_queue_in_idx) {
+        int i;
+        uint8_t* this_cmd_buf = mote->macCmd_queue[mote->macCmd_queue_out_idx];
+        uint8_t cmd_len = this_cmd_buf[0];
+        if ((tx_fhdr->FCtrl.dlBits.FOptsLen + cmd_len) > 15)
+            break;  // no more room
+
+        printf("%u:[", cmd_len);
+        for (i = 0; i < cmd_len; i++) {
+            *tx_fopts_ptr++ = this_cmd_buf[i+1];
+            tx_fhdr->FCtrl.dlBits.FOptsLen++;
+            printf("%02x ", this_cmd_buf[i+1]);
+        }
+        printf("] ");
+
+        if (++mote->macCmd_queue_out_idx == MAC_CMD_QUEUE_SIZE)
+            mote->macCmd_queue_out_idx = 0;
+    }
+    printf("\n");
+}
+
+static void
+parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf, uint8_t rx_cmd_buf_len)
+{
+    uint8_t cmd_buf[MAC_CMD_SIZE];
+    uint8_t rx_cmd_buf_idx = 0;
     int i;
     printf("rx_mac_command(s):");
     for (i = 0; i < rx_cmd_buf_len; i++)
         printf("%02x ", rx_cmd_buf[i]);
     printf("\n");
 
-    tx_fhdr->FCtrl.octet = 0;
-    tx_fhdr->FCtrl.dlBits.FOptsLen = 0;
-    tx_fhdr->FCtrl.dlBits.ACK = 1;
-
     while (rx_cmd_buf_idx < rx_cmd_buf_len) {
+
+        if (mote->session_start) {
+            band_parse_start_mac_command(rx_cmd_buf[rx_cmd_buf_idx], mote);
+        }
+
         switch (rx_cmd_buf[rx_cmd_buf_idx++]) {
 #ifdef ENABLE_CLASS_B
             float diff;
@@ -595,9 +491,14 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf
             case MOTE_MAC_LINK_CHECK_REQ:   // 0x02
                 printf("MOTE_MAC_LINK_CHECK_REQ\n");
                 /* no payload in request */
-                *tx_fopts_ptr++ = SRV_MAC_LINK_CHECK_ANS;  // 0x02
-                *tx_fopts_ptr++ = 20;  // db margin above noise floor
-                *tx_fopts_ptr++ = 1;  // gateway count
+                cmd_buf[0] = SRV_MAC_LINK_CHECK_ANS;
+                cmd_buf[1] = 20;  // db margin above noise floor
+                cmd_buf[2] = 1;  // gateway count
+                put_queue_mac_cmds(mote, 3, cmd_buf);
+                break;
+            case MOTE_MAC_LINK_ADR_ANS:
+                i = rx_cmd_buf[rx_cmd_buf_idx++];
+                printf("LINK_ADR_ANS status:0x%02x\n", i);
                 break;
 #ifdef ENABLE_CLASS_B
             case MOTE_MAC_PING_SLOT_INFO_REQ:   // 0x10
@@ -608,27 +509,43 @@ parse_mac_command(struct lgw_pkt_rx_s *rx_pkt, mote_t* mote, uint8_t* rx_cmd_buf
                 uint32_t ping_nb = 128 / (1 << mote->ping_slot_info.bits.periodicity);
                 mote->ping_period = BEACON_WINDOW_SLOTS / ping_nb;
                 LoRaMacBeaconComputePingOffset(last_beaconTime, mote->dev_addr, mote->ping_period, &mote->ping_offset);
-                *tx_fopts_ptr++ = SRV_MAC_PING_SLOT_INFO_ANS;  // 0x10
+                cmd_buf[0] = SRV_MAC_PING_SLOT_INFO_ANS;    // 0x10
+                put_queue_mac_cmds(mote, 1, cmd_buf);
                 break;
             case MOTE_MAC_BEACON_TIMING_REQ:    // 0x12
                 /* no payload in request */
                 diff = (float)(lgw_trigcnt_at_next_beacon - rx_pkt->count_us) / 30000.0;
                 i_diff = (int)floor(diff);
                 printf("MOTE_MAC_BEACON_TIMING_REQ slots:%.1f=%.1fms (int:%u,%u)", diff, diff*30.0, i_diff, i_diff*30);
-                *tx_fopts_ptr++ = SRV_MAC_BEACON_TIMING_ANS;   // 0x12
-                *tx_fopts_ptr++ = i_diff & 0xff; //lsbyte first byte
-                *tx_fopts_ptr++ = (i_diff >> 8) & 0xff;
-                *tx_fopts_ptr++ = 0;   // beacon channel index
-                printf("%02x %02x %02x\n", tx_start_fopts_ptr[1], tx_start_fopts_ptr[2], tx_start_fopts_ptr[3]);
+                cmd_buf[0] = SRV_MAC_BEACON_TIMING_ANS;   // 0x12
+                cmd_buf[1] = i_diff & 0xff; //lsbyte first byte
+                cmd_buf[2] = (i_diff >> 8) & 0xff;
+                cmd_buf[3] = 0;   // beacon channel index
+                put_queue_mac_cmds(mote, 4, cmd_buf);
+                printf("%02x %02x %02x\n", cmd_buf[1], cmd_buf[2], cmd_buf[3]);
+                break;
+            case MOTE_MAC_PING_SLOT_FREQ_ANS:
+                i = rx_cmd_buf[rx_cmd_buf_idx++];
+                printf("PING_SLOT_FREQ_ANS status:0x%02x\n", i);
+                break;
+            case MOTE_MAC_BEACON_FREQ_ANS:
+                i = rx_cmd_buf[rx_cmd_buf_idx++];
+                printf("BEACON_FREQ_ANS status:0x%02x\n", i);
                 break;
 #endif  /* ENABLE_CLASS_B */
+            case MOTE_MAC_RX_PARAM_SETUP_ANS:
+                i = rx_cmd_buf[rx_cmd_buf_idx++];
+                printf("RX_PARAM_SETUP_ANS status:0x%02x\n", i);
+                break;
+            case MOTE_MAC_NEW_CHANNEL_ANS:
+                i = rx_cmd_buf[rx_cmd_buf_idx++];
+                printf("NEW_CHANNEL_ANS status:0x%02x\n", i);
+                break;
             default:
-                printf("[31mTODO mac cmd %02x[0m\n", rx_cmd_buf[0]);
+                printf("[31mTODO mac cmd %02x[0m\n", rx_cmd_buf[rx_cmd_buf_idx-1]);
                 return;
         } // ..switch (<mac_command>)
     } // .. while have mac comannds
-
-    tx_fhdr->FCtrl.dlBits.FOptsLen = tx_fopts_ptr - tx_start_fopts_ptr;
 
 #ifndef ENABLE_CLASS_B
     (void)rx_pkt;
@@ -658,6 +575,126 @@ void print_hal_sf(uint8_t datarate)
         case DR_LORA_SF11: printf("11 "); break;
         case DR_LORA_SF12: printf("12 "); break;
     }
+}
+
+int8_t
+get_dr(uint8_t lgw_datarate, uint8_t lgw_bw)
+{
+    int dr;
+
+    for (dr = 0; data_rates[dr].bw != 0; dr++)  {
+        if (data_rates[dr].bw == lgw_bw && data_rates[dr].bps_sf == lgw_datarate) {
+            return dr;
+        }
+    }
+
+    return -1;  // DR not found
+}
+
+static void
+adr(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
+{
+    int8_t dr, i, hist_idx;
+    bool dr_done = false;
+    uint32_t datarate = rx_pkt->datarate;
+    uint32_t saved_datarate = datarate;
+    int8_t saved_txpwr_idx = mote->txpwr_idx;
+    float snr = 0, max_snr = -40, min_snr = 40;
+
+    hist_idx = mote->snr_history_idx;
+    for (i = 0; i < SNR_HISTORY_SIZE; i++) {
+        if (mote->snr_history[hist_idx] > max_snr)
+            max_snr = mote->snr_history[hist_idx];
+        if (mote->snr_history[hist_idx] < min_snr)
+            min_snr = mote->snr_history[hist_idx];
+
+        snr += mote->snr_history[hist_idx];
+
+        if (hist_idx == 0)
+            hist_idx = SNR_HISTORY_SIZE-1;
+        else
+            hist_idx--;
+    }
+    snr += rx_pkt->snr;
+    snr /= (SNR_HISTORY_SIZE+1);
+
+
+    /*printf("[33m");
+    printf("{%.1f %.1f %.1f} ", min_snr, snr, max_snr);*/
+    if ((max_snr - min_snr) > 4.0) {
+        /* unstable snr */
+        //printf("[0m\n");
+        return;
+    }
+    print_hal_sf(rx_pkt->datarate);
+
+    /* spreading-factor reduction if S/N ratio permits */
+    while (!dr_done) {
+        if (datarate == DR_LORA_SF8 || datarate == DR_LORA_SF9 || datarate == DR_LORA_SF10 ||
+            datarate == DR_LORA_SF11 || datarate == DR_LORA_SF12)
+        {
+            snr -= 3.0;
+            if (datarate == DR_LORA_SF8)
+                datarate = DR_LORA_SF7;
+            else if (datarate == DR_LORA_SF9)
+                datarate = DR_LORA_SF8;
+            else if (datarate == DR_LORA_SF10)
+                datarate = DR_LORA_SF9;
+            else if (datarate == DR_LORA_SF11)
+                datarate = DR_LORA_SF10;
+            else if (datarate == DR_LORA_SF12)
+                datarate = DR_LORA_SF11;
+
+            if (snr < 0)
+                dr_done = true;
+
+        } else {
+            dr_done = true;
+        }
+    }
+    //printf("->");
+    print_hal_sf(rx_pkt->datarate);
+
+    dr = get_dr(datarate, rx_pkt->bandwidth);
+    /*if (dr < 0)
+        printf("[41m");
+    printf("to dr%u ", dr);*/
+
+    /* tx-power reduction if S/N ratio permits */
+    while (snr > 3.0) {
+        /* txpwr_idx: higher number is lower power */
+        if (mote->txpwr_idx >= LORAMAC_MIN_TX_POWER)
+            break;
+        else {
+            mote->txpwr_idx++;
+            snr -= 3.0;
+        }
+    }
+
+    /*printf("(%u %u, %u %u) ",
+        saved_datarate,
+        datarate,
+        saved_txpwr_idx,
+        mote->txpwr_idx
+    );*/
+    if (saved_datarate != datarate || saved_txpwr_idx != mote->txpwr_idx) {
+        uint8_t cmd_buf[MAC_CMD_SIZE];
+        cmd_buf[0] = SRV_MAC_LINK_ADR_REQ;
+        cmd_buf[1] = (dr << 4) | mote->txpwr_idx; /* datarate:hi-nibble txpower:lo-nibble */
+#if defined( USE_BAND_915_HYBRID )
+        cmd_buf[2] = mote->ChMask[0] & 0xff; /* chmask lo-byte */
+        cmd_buf[3] = mote->ChMask[0] >> 8; /* chmask hi-byte */
+#elif defined( USE_BAND_915 )
+        #error todo_64ch_us915
+#else
+        cmd_buf[2] = mote->ChMask & 0xff; /* chmask lo-byte */
+        cmd_buf[3] = mote->ChMask >> 8; /* chmask hi-byte */
+#endif
+        cmd_buf[4] = 0x00; /* redundancy: RFU + ChMaskCntl:hi-nibble NbTrans:lo-nibble */
+        put_queue_mac_cmds(mote, 5, cmd_buf);
+    }
+
+    //printf("[0m\n");
 }
 
 static void
@@ -714,19 +751,17 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
         return;
     }
 
-    tx_fhdr->FCtrl.dlBits.FOptsLen = 0;
-
     if (rx_fport_ptr != NULL && *rx_fport_ptr == 0) {
         /* mac commands are encrypted onto port 0 */
         LoRa_EncryptPayload(mote->network_session_key, rxFRMPayload, rxFRMPayload_length, rx_fhdr->DevAddr, true, rx_fhdr->FCnt, decrypted);
         printf("mac commands encrypted on port 0\n");
-        parse_mac_command(rx_pkt, mote, decrypted, rxFRMPayload_length, &tx_pkt);
+        parse_mac_command(rx_pkt, mote, decrypted, rxFRMPayload_length);
     } else {
-        if (rx_fhdr->FCtrl.dlBits.FOptsLen > 0) {
+        if (rx_fhdr->FCtrl.ulBits.FOptsLen > 0) {
             /* mac commands are in header */
             printf("mac commands in header\n");
             rxofs = sizeof(mhdr_t) + sizeof(fhdr_t);
-            parse_mac_command(rx_pkt, mote, &rx_pkt->payload[rxofs], rx_fhdr->FCtrl.ulBits.FOptsLen, &tx_pkt);
+            parse_mac_command(rx_pkt, mote, &rx_pkt->payload[rxofs], rx_fhdr->FCtrl.ulBits.FOptsLen);
         }
         if (rxFRMPayload != NULL) {
             LoRa_EncryptPayload(mote->app_session_key, rxFRMPayload, rxFRMPayload_length, rx_fhdr->DevAddr, true, rx_fhdr->FCnt, decrypted);
@@ -743,8 +778,25 @@ parse_uplink(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
         }
     }
 
+    if (rx_fhdr->FCtrl.ulBits.ADR || mote->force_adr) {
+        adr(mote, rx_pkt);
+        mote->force_adr = false;
+    }
+
+    /* any pending mac commands to send? */
+    get_queued_mac_cmds(mote, &tx_pkt);
+
+/*    {
+        int n;
+        uint8_t* ptr = &tx_pkt.payload[sizeof(mhdr_t) + sizeof(fhdr_t)];
+        printf("[36mtx foptslen %u: ", tx_fhdr->FCtrl.dlBits.FOptsLen);
+        for (n = 0; n < tx_fhdr->FCtrl.dlBits.FOptsLen; n++) {
+            printf("%02x ", *ptr++);
+        }
+        printf("[0m\n");
+    }*/
     if (tx_fhdr->FCtrl.dlBits.FOptsLen > 0 || rx_mhdr->bits.MType == MTYPE_CONF_UP ||
-        mote->user_downlink_length > 0)
+        mote->user_downlink_length > 0 || rx_fhdr->FCtrl.ulBits.ADCACKReq)
     {
         /* something to send via downlink */
         if (rx_mhdr->bits.MType == MTYPE_CONF_UP)
@@ -800,9 +852,12 @@ void GenerateSessionKey(bool generateNetworkKey, const uint8_t* applicationKey, 
 void CryptJoinServer(uint8_t const* key, uint8_t const* input, uint16_t length, uint8_t* output)
 {
     aes_context aesContext;
-    aes_set_key(key, (length_type)length, &aesContext);
+    memset(aesContext.ksch, '\0', 240);
+    aes_set_key(key, LORA_CYPHERKEYBYTES, &aesContext);
 
     aes_decrypt(input, output, &aesContext);
+    if (length >= 16)
+        aes_decrypt(input + 16, output + 16, &aesContext);
 }
 
 
@@ -820,6 +875,9 @@ void SendJoinComplete(uint16_t deviceNonce, uint8_t firstReceiveWindowDataRateof
     }
 
     GenerateSessionKey(true, mote->app_key, network_id, applicationNonce, deviceNonce, networkSessionKey);
+    mote->session_start = true;
+    band_init_session(mote);
+
     memcpy(mote->network_session_key, networkSessionKey, LORA_CYPHERKEYBYTES);
     //print_octets("network_session_key", mote->network_session_key, LORA_CYPHERKEYBYTES);
     
@@ -839,11 +897,12 @@ void SendJoinComplete(uint16_t deviceNonce, uint8_t firstReceiveWindowDataRateof
     current = Write1ByteValue(current, (firstReceiveWindowDataRateoffset << 4) | (secondReceiveWindowDataRateNibble & 0xf)); // 11 
     current = Write1ByteValue(current, classARxWindowDelay_s - 1); // 12
 
+    current = band_cflist(current, mote);
+
     uint16_t authenticatedBytes = current - uncyphered;
     LoRa_GenerateJoinFrameIntegrityCode(mote->app_key, uncyphered, authenticatedBytes, current);
+    print_octets("mic", current, LORA_FRAMEMICBYTES);
     current += LORA_FRAMEMICBYTES;
-
-    print_octets("join-acc uncyphered", uncyphered, current-uncyphered);
 
     tx_pkt.payload[0] = MTYPE_JOIN_ACC << 5; // MHDR
     //encrypt
@@ -946,12 +1005,12 @@ check_devnonce(mote_t* mote, uint16_t DevNonce)
 static void
 parse_join_req(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
 {
+    int i;
     uint32_t calculated_mic;
     uint32_t rx_mic;
     join_req_t* jreq_ptr = (join_req_t*)&rx_pkt->payload[0];
 
     if (verbose) {
-        int i;
         printf("\nappkey:");
         for (i = 0; i < LORA_CYPHERKEYBYTES; i++)
             printf("%02x ", mote->app_key[i]);
@@ -988,6 +1047,14 @@ parse_join_req(mote_t* mote, struct lgw_pkt_rx_s *rx_pkt)
             printf("allow\n");
     }
 
+    mote->macCmd_queue_in_idx = mote->macCmd_queue_out_idx = 0;
+    mote->txpwr_idx = LORAMAC_DEFAULT_TX_POWER;
+    band_init_channel_mask(mote);
+
+    /* reset snr history */
+    for (i = 0; i < SNR_HISTORY_SIZE; i++)
+        mote->snr_history[i] = NULL_SNR;
+
     Rx2ChannelParams_t Rx2Channel = RX_WND_2_CHANNEL;
     SendJoinComplete(jreq_ptr->DevNonce, 0, Rx2Channel.Datarate, 1, mote, rx_pkt);
 
@@ -1004,7 +1071,7 @@ get_soonest_mote(mote_t** m)
     int16_t now_pingslot;
 
     if (host_time_at_beacon.tv_sec == 0) {
-        printf("get_soonest_mote(): beacon not sent\n");
+        //printf("get_soonest_mote(): beacon not sent\n");
         *m = NULL;
         return;
     }
@@ -1013,7 +1080,7 @@ get_soonest_mote(mote_t** m)
     seconds_since_beacon = difftimespec(host_time_now, host_time_at_beacon);
     printf("seconds_since_beacon:%.2f\n", seconds_since_beacon);
     now_pingslot = (int16_t)ceil((seconds_since_beacon - 2.12) / 0.03);
-    printf("now_pingslot:%d\r\n", now_pingslot);
+    //printf("now_pingslot:%d\r\n", now_pingslot);
 
     /* update next occurring ping in motes */
     for (mote_list_ptr = mote_list; mote_list_ptr != NULL; mote_list_ptr = mote_list_ptr->next) {
@@ -1058,8 +1125,7 @@ send_downlink_ping(mote_t *m)
     ping_tx_pkt.payload[0] = user_dowlink_mtype << 5; // MHDR
     fhdr_t* tx_fhdr = (fhdr_t*)&ping_tx_pkt.payload[1];
 
-    tx_fhdr->FCtrl.octet = 0;
-    tx_fhdr->FCtrl.dlBits.FOptsLen = 0;
+    get_queued_mac_cmds(m, &ping_tx_pkt);
     ping_tx_pkt.size = tx_fhdr->FCtrl.dlBits.FOptsLen + m->user_downlink_length + 1; // +1 for fport
 
     int txo = sizeof(mhdr_t) + sizeof(fhdr_t) + tx_fhdr->FCtrl.dlBits.FOptsLen;
@@ -1111,6 +1177,12 @@ lorawan_parse_uplink(struct lgw_pkt_rx_s *p)
         printf("unsupported major:%u\n", mhdr->bits.major);
         return;
     }
+#ifdef ENABLE_CLASS_B
+    if (beacon_guard) {
+        printf("beacon_guard\n");
+        return; /* drop uplinks during beacon guard period */
+    }
+#endif  /* ENABLE_CLASS_B */
 
 /*    raw-rf payload print:
     for (o = 0; o < p->size; o++) {
@@ -1174,6 +1246,13 @@ lorawan_parse_uplink(struct lgw_pkt_rx_s *p)
         parse_uplink(&mote_list_ptr->mote, p);
     } else
         printf(" [31m%02x mtype:%d[0m\n", p->payload[0], mhdr->bits.MType);
+
+
+    if (mote_list_ptr != NULL) {
+        mote_list_ptr->mote.snr_history[mote_list_ptr->mote.snr_history_idx] = p->snr;
+        if (++mote_list_ptr->mote.snr_history_idx == SNR_HISTORY_SIZE)
+            mote_list_ptr->mote.snr_history_idx = 0;
+    }
 }
 
 // return: 1=cmd parsed, 0=user payload
@@ -1425,6 +1504,7 @@ int parse_lorawan_configuration(const char * conf_file)
     unsigned int n_motes = json_array_get_count(mote_array);
     printf("n_motes:%u\n", n_motes);
     for (i = 0; i < n_motes; i++) {
+        int h;
         JSON_Object* mote_obj = json_array_get_object (mote_array, i);
 
         if (mote_list == NULL) {    // first time
@@ -1436,6 +1516,11 @@ int parse_lorawan_configuration(const char * conf_file)
             my_mote_list = my_mote_list->next;
             memset(my_mote_list, 0, sizeof(struct _mote_list));
         }
+
+        my_mote_list->mote.txpwr_idx = LORAMAC_DEFAULT_TX_POWER;
+        band_init_channel_mask(&my_mote_list->mote);
+        for (h = 0; h < SNR_HISTORY_SIZE; h++)
+            my_mote_list->mote.snr_history[h] = NULL_SNR;
 
         str = json_object_get_string(mote_obj, "dev_addr");
         if (str != NULL)

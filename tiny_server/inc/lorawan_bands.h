@@ -1,3 +1,5 @@
+#include "lorawan.h"
+
 extern uint8_t Rx1DrOffset;
 extern uint8_t dl_rxwin;
 
@@ -31,6 +33,14 @@ typedef struct sRx2ChannelParams
      */
     uint8_t  Datarate;
 } Rx2ChannelParams_t;
+
+/* band_cflist: join-accept appendix */
+uint8_t* band_cflist(uint8_t* ptr, mote_t* mote);
+
+/* sessions startup mac command for downlink, if any */
+void band_parse_start_mac_command(uint8_t cmd, mote_t* mote);
+void band_init_session(mote_t* mote);
+void band_init_channel_mask(mote_t* mote);
 
 #if defined( USE_BAND_915 ) || defined( USE_BAND_915_HYBRID )
 
@@ -66,7 +76,27 @@ uint8_t BeaconChannel( uint32_t devAddr );
 #define BEACON_SF           DR_LORA_SF10
 
 #define PINGSLOT_CHANNEL_FREQ( x )                  ( 923.3e6 + ( BeaconChannel( x ) * 600e3 ) )
+#define PING_SLOT_DATARATE                          DR_0    /* TODO unknown */
 
+#define LORAMAC_MIN_TX_POWER                        TX_POWER_10_DBM
+#define LORAMAC_DEFAULT_TX_POWER                    TX_POWER_20_DBM
+
+/*!
+ * LoRaMac TxPower definition
+ */
+#define TX_POWER_30_DBM                             0
+#define TX_POWER_28_DBM                             1
+#define TX_POWER_26_DBM                             2
+#define TX_POWER_24_DBM                             3
+#define TX_POWER_22_DBM                             4
+#define TX_POWER_20_DBM                             5
+#define TX_POWER_18_DBM                             6
+#define TX_POWER_16_DBM                             7
+#define TX_POWER_14_DBM                             8
+#define TX_POWER_12_DBM                             9
+#define TX_POWER_10_DBM                             10
+
+/* end USE_BAND_915 */
 #elif defined(USE_BAND_868)
 
 #define DR_0                                        0  // SF12 - BW125
@@ -86,8 +116,24 @@ uint8_t BeaconChannel( uint32_t devAddr );
 #define BEACON_SF           DR_LORA_SF9
 
 #define PINGSLOT_CHANNEL_FREQ( x )                  869525000
+#define PING_SLOT_DATARATE                          DR_3    /* TODO unknown */
 
-#elif defined(USE_BAND_ARIB_8CH)
+#define LORAMAC_MIN_TX_POWER                        TX_POWER_02_DBM
+#define LORAMAC_DEFAULT_TX_POWER                    TX_POWER_14_DBM
+
+/*!
+ * LoRaMac TxPower definition
+ */
+#define TX_POWER_20_DBM                             0
+#define TX_POWER_14_DBM                             1
+#define TX_POWER_11_DBM                             2
+#define TX_POWER_08_DBM                             3
+#define TX_POWER_05_DBM                             4
+#define TX_POWER_02_DBM                             5
+
+/* end USE_BAND_868 */
+
+#elif defined(USE_BAND_ARIB_8CH)    /****************************************/
 
 #define DR_0                                        0  // SF12 - BW125
 #define DR_1                                        1  // SF11 - BW125
@@ -106,6 +152,19 @@ uint8_t BeaconChannel( uint32_t devAddr );
 #define RX_WND_2_CHANNEL               { 921400000, DR_2 }  /* TODO add RX2 for join accept */
 
 #define PINGSLOT_CHANNEL_FREQ( x )                  922200000
-#define PING_SLOT_DATARATE          DR_3
+#define PING_SLOT_DATARATE                          DR_3
+
+#define LORAMAC_DEFAULT_TX_POWER                    TX_POWER_14_DBM
+#define LORAMAC_MIN_TX_POWER                        TX_POWER_02_DBM
+
+/*!
+ * LoRaMac TxPower definition
+ */
+#define TX_POWER_20_DBM                             0
+#define TX_POWER_14_DBM                             1
+#define TX_POWER_11_DBM                             2
+#define TX_POWER_08_DBM                             3
+#define TX_POWER_05_DBM                             4
+#define TX_POWER_02_DBM                             5
 
 #endif

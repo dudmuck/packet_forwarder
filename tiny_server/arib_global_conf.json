@@ -1,0 +1,263 @@
+{
+    "SX1301_conf": {
+        "lorawan_public": true,
+        "clksrc": 1, /* radio_1 provides clock to concentrator */
+        "radio_0": {
+            "enable": true,
+            "type": "SX1257",
+            "freq": 921700000,
+            "rssi_offset": -166.0,
+            "tx_enable": true,
+            "tx_freq_min":915000000,
+            "tx_freq_max":928000000
+        },
+        "radio_1": {
+            "enable": true,
+            "type": "SX1257",
+            "freq": 923100000,
+            "rssi_offset": -166.0,
+            "tx_enable": false
+        },
+        "chan_multiSF_0": {
+            /* Lora MAC channel, 125kHz, all SF,  921.4MHz = 921.7 - 0.3 */
+            "enable": true,
+            "radio": 0,
+            "if": -300000
+        },
+        "chan_multiSF_1": {
+            /* Lora MAC channel, 125kHz, all SF,  921.6MHz = 921.7 - 0.1 */
+            "enable": true,
+            "radio": 0,
+            "if": -100000
+        },
+        "chan_multiSF_2": {
+            /* Lora MAC channel, 125kHz, all SF,  921.8MHz = 921.7 + 0.1 */
+            "enable": true,
+            "radio": 0,
+            "if": 100000
+        },
+        "chan_multiSF_3": {
+            /* Lora MAC channel, 125kHz, all SF,  922.0MHz = 921.7 + 0.3 */
+            "enable": true,
+            "radio": 0,
+            "if": 300000
+        },
+        "chan_multiSF_4": {
+            /* Lora MAC channel, 125kHz, all SF,  922.8MHz = 923.1 - 0.3 */
+            "enable": true,
+            "radio": 1,
+            "if": -300000
+        },
+        "chan_multiSF_5": {
+            /* Lora MAC channel, 125kHz, all SF,  923.0MHz = 923.1 - 0.1 */
+            "enable": true,
+            "radio": 1,
+            "if": -100000
+        },
+        "chan_multiSF_6": {
+            /* Lora MAC channel, 125kHz, all SF,  923.2MHz = 923.1 + 0.1 */
+            "enable": true,
+            "radio": 1,
+            "if": 100000
+        },
+        "chan_multiSF_7": {
+            /* Lora MAC channel, 125kHz, all SF,  923.4MHz = 923.1 + 0.3 */
+            "enable": true,
+            "radio": 1,
+            "if": 300000
+        },
+        "chan_Lora_std": {
+            /* Lora MAC channel, 250kHz, SF8, 921.5 = 921.7 - 0.2 */
+            "enable": true,
+            "radio": 0,
+            "if": -200000,
+            "bandwidth": 250000,
+            "spread_factor": 8
+        },
+        "chan_FSK": {
+            /* FSK 100kbps channel, 927.3 MHz */
+            "enable": false,
+            "radio": 0,
+            "if": 300000,
+            "bandwidth": 250000,
+            "datarate": 100000
+        },
+        "tx_lut_0": {
+            /* TX gain table, index 0 */
+            "pa_gain": 0,
+            "mix_gain": 8,
+            "rf_power": -6,
+            "dig_gain": 0
+        },
+        "tx_lut_1": {
+            /* TX gain table, index 1 */
+            "pa_gain": 0,
+            "mix_gain": 10,
+            "rf_power": -3,
+            "dig_gain": 0
+        },
+        "tx_lut_2": {
+            /* TX gain table, index 2 */
+            "pa_gain": 0,
+            "mix_gain": 12,
+            "rf_power": 0,
+            "dig_gain": 0
+        },
+        "tx_lut_3": {
+            /* TX gain table, index 3 */
+            "pa_gain": 1,
+            "mix_gain": 8,
+            "rf_power": 3,
+            "dig_gain": 0
+        },
+        "tx_lut_4": {
+            /* TX gain table, index 4 */
+            "pa_gain": 1,
+            "mix_gain": 10,
+            "rf_power": 6,
+            "dig_gain": 0
+        },
+        "tx_lut_5": {
+            /* TX gain table, index 5 */
+            "pa_gain": 1,
+            "mix_gain": 12,
+            "rf_power": 10,
+            "dig_gain": 0
+        },
+        "tx_lut_6": {
+            /* TX gain table, index 6 */
+            "pa_gain": 1,
+            "mix_gain": 13,
+            "rf_power": 11,
+            "dig_gain": 0
+        },
+        "tx_lut_7": {
+            /* TX gain table, index 7 */
+            "pa_gain": 2,
+            "mix_gain": 9,
+            "rf_power": 12,
+            "dig_gain": 0
+        },
+        "tx_lut_8": {
+            /* TX gain table, index 8 */
+            "pa_gain": 1,
+            "mix_gain": 15,
+            "rf_power": 13,
+            "dig_gain": 0
+        },
+        "tx_lut_9": {
+            /* TX gain table, index 9 */
+            "pa_gain": 2,
+            "mix_gain": 10,
+            "rf_power": 14,
+            "dig_gain": 0
+        },
+        "tx_lut_10": {
+            /* TX gain table, index 10 */
+            "pa_gain": 2,
+            "mix_gain": 11,
+            "rf_power": 16,
+            "dig_gain": 0
+        },
+        "tx_lut_11": {
+            /* TX gain table, index 11 */
+            "pa_gain": 3,
+            "mix_gain": 9,
+            "rf_power": 20,
+            "dig_gain": 0
+        },
+        "tx_lut_12": {
+            /* TX gain table, index 12 */
+            "pa_gain": 3,
+            "mix_gain": 10,
+            "rf_power": 23,
+            "dig_gain": 0
+        },
+        "tx_lut_13": {
+            /* TX gain table, index 13 */
+            "pa_gain": 3,
+            "mix_gain": 11,
+            "rf_power": 25,
+            "dig_gain": 0
+        },
+        "tx_lut_14": {
+            /* TX gain table, index 14 */
+            "pa_gain": 3,
+            "mix_gain": 12,
+            "rf_power": 26,
+            "dig_gain": 0
+        },
+        "tx_lut_15": {
+            /* TX gain table, index 15 */
+            "pa_gain": 3,
+            "mix_gain": 14,
+            "rf_power": 27,
+            "dig_gain": 0
+        }
+    },
+
+    "lorawan": {
+        "motes":[
+            {
+            "dev_addr": "cafebabe",
+            "network_session_key": "fe:ed:ba:ab:ca:fe:d0:0d:de:ad:00:11:22:33:44:55",
+            "app_session_key":     "ff:ee:dd:cc:bb:aa:99:88:77:66:55:44:33:22:11:00"
+            },
+            {
+            "dev_addr": "000013cb",
+            "network_session_key": "f5 7f cb 3f 13 a2 1d 59 0a 83 c4 75 ae d6 ed 05",
+            "app_session_key":     "9a 75 90 80 40 4b 77 11 fd 5c 9b 35 32 df 24 8d"
+            },
+            {
+            "dev_addr": "0000f00d",
+            "network_session_key": "2B 7E 15 16 28 AE D2 A6 AB F7 15 88 09 CF 4F 3C",
+            "app_session_key":     "2B 7E 15 16 28 AE D2 A6 AB F7 15 88 09 CF 4F 3C"
+            },
+            {
+            "dev_addr": "0000baad",
+            "network_session_key": "11 22 33 44 55 66 77 88 99 AA BB CC DD EE FF AA",
+            "app_session_key":     "2B 7E 15 16 28 AE D2 A6 AB F7 15 88 09 CF 4F 3C "
+            },
+            {
+                "app_eui":"00 00 00 00 00 00 00 00",
+                "dev_eui":"19 51 34 30 9e 30 6a 37",
+                "app_key":"00 11 22 33 44 55 66 77 88 99 aa bb cc dd ee ff"
+            },
+            {
+                "app_eui":"00 00 00 00 00 00 00 00",
+                "dev_eui":"00 00 00 00 00 00 00 01",
+                "app_key":"2B 7E 15 16 28 AE D2 A6 AB F7 15 88 09 CF 4F 3C"
+            }
+        ],
+        "network_id":"24",
+        "Rx1DrOffset":0,
+        "dl_rxwin":1,
+        "join_ignore_count":0
+    },
+
+    "gateway_conf": {
+        "gateway_ID": "01003c970e2a6430",
+        /* change with default server address/ports, or overwrite in local_conf.json */
+        "server_address": "10.12.20.113",
+        "serv_port_up": 1700,
+        "serv_port_down": 1700,
+/*        "server_address": "10.12.20.98",
+        "serv_port_up": 1700,
+        "serv_port_down": 1700,*/
+/*        "server_address": "us01iot1.semnet.dom",
+        "serv_port_up": 1780,
+        "serv_port_down": 1780,*/
+        /* adjust the following parameters for your network */
+        "keepalive_interval": 10,
+        "stat_interval": 60,
+        "push_timeout_ms": 100,
+        /* forward only valid packets */
+        "forward_crc_valid": true,
+        "forward_crc_error": false,
+        "forward_crc_disabled": false,
+        /* GPS configuration */
+        "gps_tty_path": "/dev/ttyAMA0",
+		"beacon_period":128,
+		"beacon_freq_hz":922000000
+    }
+}

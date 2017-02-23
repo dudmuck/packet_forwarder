@@ -10,7 +10,6 @@
 #include <math.h>
 #include "loragw_hal.h"
 #include "lorawan_bands.h"
-#include "lorawan.h"
 
 
 typedef union uDrRange
@@ -199,6 +198,43 @@ int check_band_config(uint32_t cf)
     return 0;
 }
 
+void band_parse_start_mac_command(uint8_t cmd, mote_t* mote)
+{
+    (void)cmd;
+    (void)mote;
+}
+
+void band_init_session(mote_t* mote)
+{
+    (void)mote;
+}
+
+uint8_t* band_cflist(uint8_t* ptr, mote_t* mote)
+{
+    (void)mote;
+    return ptr;
+}
+
+void band_init_channel_mask(mote_t* mote)
+{
+#if defined( USE_BAND_915 )
+    mote->ChMask[0] = 0xFFFF;
+    mote->ChMask[1] = 0xFFFF;
+    mote->ChMask[2] = 0xFFFF;
+    mote->ChMask[3] = 0xFFFF;
+    mote->ChMask[4] = 0x00FF;
+    mote->ChMask[5] = 0x0000;
+#elif defined( USE_BAND_915_HYBRID )
+    mote->ChMask[0] = 0x00FF;
+    mote->ChMask[1] = 0x0000;
+    mote->ChMask[2] = 0x0000;
+    mote->ChMask[3] = 0x0000;
+    mote->ChMask[4] = 0x0001;
+    mote->ChMask[5] = 0x0000;
+#endif
+}
+
+/* end USE_BAND_915 */
 #elif defined(USE_BAND_868)
 
 const data_rate_t data_rates[] = {
@@ -295,6 +331,29 @@ int check_band_config(uint32_t cf)
     return 0;
 }
 
+void band_parse_start_mac_command(uint8_t cmd, mote_t* mote)
+{
+    (void)cmd;
+    (void)mote;
+}
+
+void band_init_session(mote_t* mote)
+{
+    (void)mote;
+}
+
+uint8_t* band_cflist(uint8_t* ptr, mote_t* mote)
+{
+    (void)mote;
+    return ptr;
+}
+
+void band_init_channel_mask(mote_t* mote)
+{
+    mote->ChMask = 0x0007;  /* LC1, LC2, LC3 */
+}
+
+/* end USE_BAND_868 */
 #elif defined(USE_BAND_ARIB_8CH)
 
 const data_rate_t data_rates[] = {
@@ -357,5 +416,107 @@ int check_band_config(uint32_t cf)
     return 0;
 }
 
+uint8_t* band_cflist(uint8_t* ptr, mote_t* mote)
+{
+    uint32_t freq;
+    /*
+     * LoRaMacChannelAdd(3) 921800000hz dr:0x53 add ch3 mask:000b
+     * LoRaMacChannelAdd(4) 921600000hz dr:0x53 add ch4 mask:001b
+     * LoRaMacChannelAdd(5) 921400000hz dr:0x53 add ch5 mask:003b*/
+
+    freq = 921800000 / 100; // ch4
+    ptr = Write3ByteValue(ptr, freq);
+
+    freq = 921600000 / 100; // ch5
+    ptr = Write3ByteValue(ptr, freq);
+
+    freq = 921400000 / 100; // ch6
+    ptr = Write3ByteValue(ptr, freq);
+
+    freq = 0;   // ch7
+    ptr = Write3ByteValue(ptr, freq);
+
+    freq = 0;   // ch8
+    ptr = Write3ByteValue(ptr, freq);
+
+    ptr = Write1ByteValue(ptr, 0);  // CFListType
+
+    /* sending these 3 channels enabled 3 bits in channel mask */
+    mote->ChMask |= 0x0038;
+
+    return ptr;
+}
+
+void band_parse_start_mac_command(uint8_t cmd, mote_t* mote)
+{
+    uint8_t cmd_buf[MAC_CMD_SIZE];
+    uint32_t freq;
+
+    switch (cmd) {
+        case MOTE_MAC_RX_PARAM_SETUP_ANS:
+            freq = 922000000 / 100;
+
+            cmd_buf[0] = SRV_MAC_NEW_CHANNEL_REQ;
+            cmd_buf[1] = 2; // channel index 
+            cmd_buf[2] = freq & 0xff;
+            cmd_buf[3] = (freq >> 8) & 0xff;
+            cmd_buf[4] = (freq >> 16) & 0xff;
+            cmd_buf[5] = (DR_5 << 4) | DR_3;  // DrRange
+            put_queue_mac_cmds(mote, 6, cmd_buf);
+
+            mote->ChMask |= 0x0004;  // ch2 enable
+            mote->force_adr = true;  // ensure ch_mask is sent
+            printf("put NEW_CHANNEL_REQ\n");
+            break;
+        case MOTE_MAC_NEW_CHANNEL_ANS:
+            mote->ChMask &= ~0x0003;  // ch0,1 disable
+            mote->force_adr = true;  // ensure ch_mask is sent
+            mote->session_start = false;   // done
+            printf("session_start = false\n");
+            break;
+    } // ...switch (cmd)
+}
+
+void band_init_session(mote_t* mote)
+{
+    uint8_t cmd_buf[MAC_CMD_SIZE];
+    uint32_t freq;
+    Rx2ChannelParams_t Rx2Channel = RX_WND_2_CHANNEL;
+
+    printf("PING_SLOT_CHANNEL_REQ ");
+
+    freq = PINGSLOT_CHANNEL_FREQ(0) / 100;
+    cmd_buf[0] = SRV_MAC_PING_SLOT_CHANNEL_REQ;
+    cmd_buf[1] = freq & 0xff;
+    cmd_buf[2] = (freq >> 8) & 0xff;
+    cmd_buf[3] = (freq >> 16) & 0xff;
+    cmd_buf[4] = PING_SLOT_DATARATE;
+    put_queue_mac_cmds(mote, 5, cmd_buf);
+
+
+    freq = BEACON_CHANNEL_FREQ() / 100;
+    cmd_buf[0] = SRV_MAC_BEACON_FREQ_REQ;
+    cmd_buf[1] = freq & 0xff;
+    cmd_buf[2] = (freq >> 8) & 0xff;
+    cmd_buf[3] = (freq >> 16) & 0xff;
+    put_queue_mac_cmds(mote, 4, cmd_buf);
+
+
+    freq = Rx2Channel.Frequency / 100;
+    cmd_buf[0] = SRV_MAC_RX_PARAM_SETUP_REQ;   // Rx2 window config 
+    cmd_buf[1] = 0 | Rx2Channel.Datarate; // drOffset:hi-nibble, datarate:lo-nibble 
+    cmd_buf[2] = freq & 0xff;
+    cmd_buf[3] = (freq >> 8) & 0xff;
+    cmd_buf[4] = (freq >> 16) & 0xff;
+    put_queue_mac_cmds(mote, 5, cmd_buf);
+
+}
+
+void band_init_channel_mask(mote_t* mote)
+{
+    mote->ChMask = 0x0003;  /* LC1, LC2 */
+}
+
+/* end ARIB_8CH */
 #endif /* USE_BAND */
 
