@@ -1909,6 +1909,7 @@ void thread_down(void) {
     beacon_pkt.no_header = true;
     /****** ...region specific *********/
 
+    beacon_pkt.coderate = CR_LORA_4_5;
     /* fixed bacon fields (little endian) */
     beacon_pkt.payload[0] = 0x0; /* RFU */
     beacon_pkt.payload[1] = 0x0; /* RFU */
