@@ -22,8 +22,15 @@ RELEASE_VERSION := `cat ../VERSION`
 CC := $(CROSS_COMPILE)gcc
 AR := $(CROSS_COMPILE)ar
 
-CFLAGS := -O2 -Wall -Wextra -std=c99 -Iinc -I. -DENABLE_HAL_UBX
+CFLAGS := -O2 -Wall -Wextra -std=c99 -Iinc -I.
 VFLAG := -D VERSION_STRING="\"$(RELEASE_VERSION)\""
+
+ifdef ENABLE_HAL_UBX
+CFLAGS += -DENABLE_HAL_UBX
+endif
+
+# band definition for beacon generation
+CFLAGS += -DUSE_BAND_ARIB_8CH
 
 ### Constants for Lora concentrator HAL library
 # List the library sub-modules that are used by the application

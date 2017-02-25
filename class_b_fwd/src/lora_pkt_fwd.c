@@ -56,6 +56,7 @@ Maintainer: Michael Coracin
 #include "loragw_gps.h"
 #include "loragw_aux.h"
 #include "loragw_reg.h"
+#include "lorawan_bands.h"
 
 /* -------------------------------------------------------------------------- */
 /* --- PRIVATE MACROS ------------------------------------------------------- */
@@ -1895,19 +1896,18 @@ void thread_down(void) {
     beacon_pkt.rf_chain = 0; /* antenna A */
     beacon_pkt.rf_power = 14;
     beacon_pkt.modulation = MOD_LORA;
-    beacon_pkt.bandwidth = BW_125KHZ;
-	if (beacon_freq_hz > 921000000 && beacon_freq_hz < 924000000) {
-    	beacon_pkt.datarate = DR_LORA_SF10;	/* JPN920POC */
-    	beacon_pkt.coderate = CR_LORA_4_5;
-	} else {
-    	beacon_pkt.datarate = DR_LORA_SF9;
-    	beacon_pkt.coderate = CR_LORA_4_5;
-	}
+
+    /****** region specific... *********/
+    beacon_pkt.bandwidth = BEACON_BW;
+    beacon_pkt.datarate = BEACON_SF;
+    beacon_pkt.freq_hz = (uint32_t)(xtal_correct * (double)BEACON_CHANNEL_FREQ());
+    beacon_pkt.size = BEACON_SIZE;
+
     beacon_pkt.invert_pol = false;
     beacon_pkt.preamble = 10;
     beacon_pkt.no_crc = true;
     beacon_pkt.no_header = true;
-    beacon_pkt.size = 17;
+    /****** ...region specific *********/
 
     /* fixed bacon fields (little endian) */
     beacon_pkt.payload[0] = 0x0; /* RFU */
@@ -2014,10 +2014,10 @@ void thread_down(void) {
                     lgw_gps2cnt(time_reference_gps, next_beacon_gps_time, &(beacon_pkt.count_us));
                     pthread_mutex_unlock(&mx_timeref);
 
-                    /* apply frequency correction to beacon TX frequency */
+                    /* apply frequency correction to beacon TX frequency 
                     pthread_mutex_lock(&mx_xcorr);
                     beacon_pkt.freq_hz = (uint32_t)(xtal_correct * (double)beacon_freq_hz);
-                    pthread_mutex_unlock(&mx_xcorr);
+                    pthread_mutex_unlock(&mx_xcorr);*/
 
                     /* load time in beacon payload */
                     beacon_pkt.payload[2] = 0xFF &  next_beacon_gps_time.tv_sec;
@@ -2058,7 +2058,7 @@ void thread_down(void) {
                         if (i%8 != 0) {
                             MSG("\n");
                         }
-                        MSG("--- end of payload ---\n");
+                        MSG("--- end of payload --- %uhz\n", beacon_pkt.freq_hz);
                     } else {
                         MSG_DEBUG(DEBUG_BEACON, "--> beacon queuing failed with %d\n", jit_result);
                         /* update stats */
