@@ -11,16 +11,15 @@ list(APPEND forwarder_sources
 )
 
 find_library(MATH_LIB m)
-#find_library(BLKID_LIB blkid)
+find_library(P_LIB pthread)
 
 add_executable(forwarder ${forwarder_sources})
 
 target_link_libraries(forwarder 
     ${CMAKE_CURRENT_SOURCE_DIR}/../../lora_gateway/libloragw/libloragw.a
     ${MATH_LIB}
+    ${P_LIB}
 )
-#    ${BLKID_LIB}
-#    ${P_LIB}
 
 
 

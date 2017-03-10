@@ -132,6 +132,7 @@
     "gateway_conf": {
         "gps_tty_path": "/dev/ttyAMA0",
         "server_address": "10.12.20.116",
+/*        "server_address": "10.12.20.128",*/
         "server_port": 5555
     }
 

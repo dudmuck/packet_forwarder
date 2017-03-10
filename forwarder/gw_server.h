@@ -1,3 +1,5 @@
+#define PROT_VER        1
+
 
 #define REQ_CONF                0
 #define BEACON_INDICATION       1

@@ -89,6 +89,7 @@ struct timespec g_utc_time; /* UTC time associated with PPS pulse */
 struct timespec g_gps_time; /* UBX time associated with PPS pulse */
 struct timespec* time_ptr_ = &g_gps_time;    /* ? using UTC or UBX ? */
 bool gps_time_valid = false;
+struct coord_s coord;   /* physical location */
 
 uint32_t beacon_period = 128;
 
@@ -254,7 +255,7 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
     val = json_object_get_value(conf_obj, "lorawan_public"); /* fetch value (if possible) */
     if (json_value_get_type(val) == JSONBoolean) {
         _boardconf.lorawan_public = (bool)json_value_get_boolean(val);
-    } 
+    }
 
     val = json_object_get_value(conf_obj, "clksrc"); /* fetch value (if possible) */
     if (json_value_get_type(val) == JSONNumber) {
@@ -833,12 +834,13 @@ gps_ubx_uart_service()
                             printf("nmea-UNKNOWN\n");
                         } else if (latest_msg == IGNORED) {
                             printf("nmea-IGNORED\n");
-                        } else if (latest_msg == NMEA_RMC || latest_msg == NMEA_GGA) { 
-                            int i = lgw_gps_get(&g_utc_time, &this_gps_time, NULL, NULL);
+                        } else if (latest_msg == NMEA_RMC || latest_msg == NMEA_GGA) {
+                            int i = lgw_gps_get(&g_utc_time, &this_gps_time, &coord, NULL);
                             if (i != LGW_GPS_SUCCESS) {
                                 MSG("WARNING: [gps] could not get GPS time from GPS\n");
                                 gps_time_valid = false;
                             } else {
+                                //printf("# GPS coordinates: latitude %.5f, longitude %.5f, altitude %i m\n", coord.lat, coord.lon, coord.alt);
                                 //printf("utc:%lu.%09lu\n", g_utc_time.tv_sec, g_utc_time.tv_nsec);
                                 gps_time_valid = true;
                             }
@@ -909,9 +911,10 @@ int request_config()
     char file_buf[4096];
     struct timeval timeout;
     JSON_Value *root_val = NULL;
+    uint32_t u32 = PROT_VER;
 
     /* ask server for our RX frequencies */
-    write_to_server(REQ_CONF, NULL, 0);
+    write_to_server(REQ_CONF, (uint8_t*)&u32, sizeof(uint32_t));
 
     gps_ubx_uart_service();
 
@@ -1103,17 +1106,35 @@ int check_sx1301_config()
 void
 notify_server(uint32_t tstamp_at_beacon_tx, uint32_t beacon_sent_seconds)
 {
+    double* dptr;
+    short* sptr;
     uint32_t* u32_ptr;
-    uint8_t user_buf[8];
+    uint8_t user_buf[8 + sizeof(struct coord_s)];
+    unsigned int buf_idx = 0;
 
     printf("notify_server(%u, %u)\n", tstamp_at_beacon_tx, beacon_sent_seconds);
 
-    u32_ptr = (uint32_t*)&user_buf[0];   // 0,1,2,3
+    u32_ptr = (uint32_t*)&user_buf[buf_idx];
     *u32_ptr = tstamp_at_beacon_tx;
-    u32_ptr = (uint32_t*)&user_buf[4];   // 4,5,6,7
-    *u32_ptr = beacon_sent_seconds;
+    buf_idx += sizeof(uint32_t);
 
-    if (write_to_server(BEACON_INDICATION, user_buf, 8) < 0) {
+    u32_ptr = (uint32_t*)&user_buf[buf_idx];
+    *u32_ptr = beacon_sent_seconds;
+    buf_idx += sizeof(uint32_t);
+
+    dptr = (double*)&user_buf[buf_idx];
+    *dptr = coord.lat;
+    buf_idx += sizeof(double);
+
+    dptr = (double*)&user_buf[buf_idx];
+    *dptr = coord.lon;
+    buf_idx += sizeof(double);
+
+    sptr = (short*)&user_buf[buf_idx];
+    *sptr = coord.alt;
+    buf_idx += sizeof(short);
+
+    if (write_to_server(BEACON_INDICATION, user_buf, buf_idx) < 0) {
         printf("notify server write failed\n");
     }
 }
@@ -1153,7 +1174,7 @@ load_beacon(uint32_t seconds)
     uint8_t rfuOffset2 = beacon_info.rfuOffset2;
 
     tx_pkt.size = beacon_info.size;
-    
+
     tx_pkt.payload[2 + rfuOffset1] = seconds;
     tx_pkt.payload[3 + rfuOffset1] = seconds >> 8;
     tx_pkt.payload[4 + rfuOffset1] = seconds >> 16;
@@ -1224,7 +1245,8 @@ int first_pps()
 
         if (gps_time_valid && time_ptr_->tv_sec != 0) {
             seconds_to_beacon = ((time_ptr_->tv_sec | beacon_period_mask) + 1) - time_ptr_->tv_sec;
-        }
+        } else
+            printf("gps_time_valid %d, %lu\n", gps_time_valid, time_ptr_->tv_sec);
     } while (seconds_to_beacon < 4);    // cant start too close to beacon
 
     pps_cnt = (beacon_period - seconds_to_beacon) + 1;
@@ -1238,14 +1260,31 @@ int first_pps()
 
 
     {
+        uint32_t buf_idx = 0;
         uint32_t lgw_trigcnt_at_next_beacon;
         uint32_t* u32_ptr;
-        uint8_t buf[sizeof(uint32_t)];
+        double* dptr;
+        short* sptr;
+        uint8_t buf[sizeof(uint32_t)+sizeof(struct coord_s)];
         uint32_t seconds_to_beacon = ((time_ptr_->tv_sec | beacon_period_mask) + 1) - time_ptr_->tv_sec;
         lgw_trigcnt_at_next_beacon = trig_tstamp + (seconds_to_beacon * 1000000);
         u32_ptr = (uint32_t*)buf;
         *u32_ptr = lgw_trigcnt_at_next_beacon;
-        write_to_server(BEACON_INIT, buf, sizeof(uint32_t));
+        buf_idx += sizeof(uint32_t);
+
+        dptr = (double*)&buf[buf_idx];
+        *dptr = coord.lat;
+        buf_idx += sizeof(double);
+
+        dptr = (double*)&buf[buf_idx];
+        *dptr = coord.lon;
+        buf_idx += sizeof(double);
+
+        sptr = (short*)&buf[buf_idx];
+        *sptr = coord.alt;
+        buf_idx += sizeof(short);
+
+        write_to_server(BEACON_INIT, buf, buf_idx);
     }
 
     return 0;
@@ -1475,10 +1514,9 @@ void gw_tx_service()
             printf("[31m");
         printf("sending tx_pkts[%d] at %u (%dus before tx)[0m\n", ftbs_i, count_us_now, min_us_to_tx_start);
         i = lgw_send(tx_pkts[ftbs_i]);
+        tx_pkts[ftbs_i].freq_hz = 0;    // mark as sent
         if (i == LGW_HAL_ERROR) {
             printf("lgw_send() failed\n");
-        } else {
-            tx_pkts[ftbs_i].freq_hz = 0;
         }
     }
 }
