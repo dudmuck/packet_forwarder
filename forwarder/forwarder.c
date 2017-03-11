@@ -735,7 +735,7 @@ gps_ubx_uart_service()
     ioctl(gps_tty_fd, FIONREAD, &bytes_available);
 
     while (bytes_available > 0) {
-        static char serial_buff[128];
+        static uint8_t serial_buff[128];
         ssize_t nb_char;
         nb_char = read(gps_tty_fd, serial_buff, sizeof(serial_buff));
         if (nb_char < 0) {
