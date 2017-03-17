@@ -106,6 +106,7 @@ struct {
     uint8_t bw;
     uint8_t rfuOffset1;
     uint8_t rfuOffset2;
+    bool us915;
 } beacon_info;
 uint8_t skip_beacon_cnt = 0;
 
@@ -173,12 +174,20 @@ static int parse_lorawan_configuration(JSON_Value *root_val)
     } else
         return -1;
 
+    val = json_object_get_value(conf_obj, "us915_beacon");
+    if (json_value_get_type(val) == JSONBoolean) {
+        beacon_info.us915 = json_value_get_boolean(val);
+        MSG("beacon us915:%u\n", beacon_info.us915);
+    } else
+        beacon_info.us915 = false;
+
     val = json_object_get_value(conf_obj, "beacon_hz");
     if (json_value_get_type(val) == JSONNumber) {
         beacon_info.hz = json_value_get_number(val);
         MSG("beacon_hz:%u\n", beacon_info.hz);
-    } else
+    } else if (!beacon_info.us915) {
         return -1;
+    }
 
     val = json_object_get_value(conf_obj, "beacon_sf");
     if (json_value_get_type(val) == JSONNumber) {
@@ -197,7 +206,7 @@ static int parse_lorawan_configuration(JSON_Value *root_val)
 
     val = json_object_get_value(conf_obj, "beacon_bw");
     if (json_value_get_type(val) == JSONNumber) {
-        unsigned int bw_khz = (uint8_t)json_value_get_number(val);
+        unsigned int bw_khz = json_value_get_number(val);
         MSG("beacon_bw:%u\n", bw_khz);
         switch (bw_khz) {
             case 7: beacon_info.bw = BW_7K8HZ; break;
@@ -223,6 +232,7 @@ static int parse_lorawan_configuration(JSON_Value *root_val)
         beacon_info.rfuOffset2 = (uint8_t)json_value_get_number(val);
     } else
         return -1;
+
 
     return 0;
 }
@@ -1104,7 +1114,7 @@ int check_sx1301_config()
 }
 
 void
-notify_server(uint32_t tstamp_at_beacon_tx, uint32_t beacon_sent_seconds)
+notify_server(uint32_t tstamp_at_beacon_tx, uint32_t beacon_sent_seconds, uint8_t ch)
 {
     double* dptr;
     short* sptr;
@@ -1133,6 +1143,8 @@ notify_server(uint32_t tstamp_at_beacon_tx, uint32_t beacon_sent_seconds)
     sptr = (short*)&user_buf[buf_idx];
     *sptr = coord.alt;
     buf_idx += sizeof(short);
+
+    user_buf[buf_idx++] = ch;   // which channel was beacon sent on
 
     if (write_to_server(BEACON_INDICATION, user_buf, buf_idx) < 0) {
         printf("notify server write failed\n");
@@ -1165,13 +1177,21 @@ static uint16_t BeaconCrc( uint8_t *buffer, uint16_t length )
     return crc;
 }
 
-void
+uint8_t
 load_beacon(uint32_t seconds)
 {
     struct lgw_pkt_tx_s tx_pkt;
     uint16_t crc0, crc1;
     uint8_t rfuOffset1 = beacon_info.rfuOffset1;
     uint8_t rfuOffset2 = beacon_info.rfuOffset2;
+    uint8_t chan_ret;
+
+    if (beacon_info.us915) {
+        unsigned int sp = seconds / beacon_period;
+        chan_ret = sp & 7;
+        beacon_info.hz = 923300000 + (600000 * chan_ret);
+    } else
+        chan_ret = 0;
 
     tx_pkt.size = beacon_info.size;
 
@@ -1218,6 +1238,8 @@ load_beacon(uint32_t seconds)
     if (lgw_send(tx_pkt) == LGW_HAL_ERROR) {
         printf("lgw_send() failed\n");
     }
+
+    return chan_ret;
 }
 
 uint32_t prev_trig_tstamp;
@@ -1259,7 +1281,7 @@ int first_pps()
     printf(" lgw_trigcnt_at_next_beacon:%u\n", lgw_trigcnt_at_next_beacon);
 
 
-    {
+    {   /* send initial beacon info to server */
         uint32_t buf_idx = 0;
         uint32_t lgw_trigcnt_at_next_beacon;
         uint32_t* u32_ptr;
@@ -1284,6 +1306,12 @@ int first_pps()
         *sptr = coord.alt;
         buf_idx += sizeof(short);
 
+        if (beacon_info.us915) {
+            unsigned int sp = time_ptr_->tv_sec / beacon_period;
+            buf[buf_idx++] = sp & 7;
+        } else
+            buf[buf_idx++] = 0;
+
         write_to_server(BEACON_INIT, buf, buf_idx);
     }
 
@@ -1298,7 +1326,7 @@ int pps(uint32_t trig_tstamp)
     static bool save_next_tstamp = false;
     uint8_t beacon_period_mask = beacon_period - 1;
     static struct timespec beacon_sent_seconds;
-
+    static uint8_t ch = 0;
 
     if (++pps_cnt > beacon_period) {
         printf("pps_cnt:%u\n", pps_cnt);
@@ -1317,7 +1345,7 @@ int pps(uint32_t trig_tstamp)
 
         pps_cnt = 0;
         beacon_sent_seconds.tv_sec = time_ptr_->tv_sec + 1;
-        load_beacon(beacon_sent_seconds.tv_sec);
+        ch = load_beacon(beacon_sent_seconds.tv_sec);
         save_next_tstamp = true;
     } else if ((time_ptr_->tv_sec & beacon_period_mask) == (beacon_period_mask-2)) {
         beacon_guard = true;
@@ -1328,7 +1356,7 @@ int pps(uint32_t trig_tstamp)
         tstamp_at_beacon_tx = trig_tstamp;
         printf("tstamp_at_beacon_tx:%u, pps_cnt:%d sec:%lx\n",  tstamp_at_beacon_tx, pps_cnt, time_ptr_->tv_sec);
 
-        notify_server(tstamp_at_beacon_tx, beacon_sent_seconds.tv_sec);
+        notify_server(tstamp_at_beacon_tx, beacon_sent_seconds.tv_sec, ch);
 
         beacon_guard = false;
     }
