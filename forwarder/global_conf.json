@@ -1,6 +1,10 @@
 {
     "SX1301_conf": {
         "clksrc": 1, /* radio_1 provides clock to concentrator */
+		"lbt_cfg": {
+			"enable": false,
+			"sx127x_rssi_offset": -4	/* dBm */
+		},
         "radio_0": {
             "enable": true,
             "type": "SX1257",
@@ -131,6 +135,7 @@
 
     "gateway_conf": {
         "gps_tty_path": "/dev/ttyAMA0",
+        "run_rate_ms": 50,
         "server_address": "10.12.20.116",
 /*        "server_address": "10.12.20.128",*/
         "server_port": 5555

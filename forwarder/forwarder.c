@@ -31,9 +31,6 @@
 /* how much time before packet to be sent, should packet be loaded into radio */
 #define TX_PRELOAD_US           200000
 
-//#define MAIN_LOOP_RATE_NS       10000000
-#define MAIN_LOOP_RATE_NS       100000000
-
 /* our "copy" of sx1301 counter sync'd on pps pulse */
 uint32_t pseudo_sx1301_cnt_us;
 
@@ -90,6 +87,8 @@ struct timespec g_gps_time; /* UBX time associated with PPS pulse */
 struct timespec* time_ptr_ = &g_gps_time;    /* ? using UTC or UBX ? */
 bool gps_time_valid = false;
 struct coord_s coord;   /* physical location */
+
+long run_rate_nsec;
 
 uint32_t beacon_period = 128;
 
@@ -278,32 +277,40 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
         MSG("INFO: no configuration for LBT\n");
     } else {
         val = json_object_get_value(conf_lbt_obj, "enable"); /* fetch value (if possible) */
-        if (json_value_get_type(val) == JSONBoolean) {
-            _lbtconf.enable = (bool)json_value_get_boolean(val);
-        } else {
-            MSG("WARNING: Data type for lbt_cfg.enable seems wrong, please check (val:%p)\n", val);
-            _lbtconf.enable = false;
+        if (val != NULL) {
+            if (json_value_get_type(val) == JSONBoolean) {
+                _lbtconf.enable = (bool)json_value_get_boolean(val);
+            } else {
+                MSG("WARNING: Data type for lbt_cfg.enable seems wrong, please check (val:%p)\n", val);
+                _lbtconf.enable = false;
+            }
         }
+
+
         if (_lbtconf.enable == true) {
             val = json_object_get_value(conf_lbt_obj, "rssi_target"); /* fetch value (if possible) */
-            if (json_value_get_type(val) == JSONNumber) {
-                _lbtconf.rssi_target = (int8_t)json_value_get_number(val);
-            } else {
-                MSG("WARNING: Data type for lbt_cfg.rssi_target seems wrong, please check (val:%p)\n", val);
-                _lbtconf.rssi_target = 0;
+            if (val != NULL) {
+                if (json_value_get_type(val) == JSONNumber) {
+                    _lbtconf.rssi_target = (int8_t)json_value_get_number(val);
+                } else {
+                    MSG("WARNING: Data type for lbt_cfg.rssi_target seems wrong, please check (val:%p)\n", val);
+                    _lbtconf.rssi_target = 0;
+                }
             }
             val = json_object_get_value(conf_lbt_obj, "sx127x_rssi_offset"); /* fetch value (if possible) */
-            if (json_value_get_type(val) == JSONNumber) {
-                _lbtconf.rssi_offset = (int8_t)json_value_get_number(val);
-            } else {
-                MSG("WARNING: Data type for lbt_cfg.sx127x_rssi_offset seems wrong, please check (val:%p)\n", val);
-                _lbtconf.rssi_offset = 0;
+            if (val != NULL) {
+                if (json_value_get_type(val) == JSONNumber) {
+                    _lbtconf.rssi_offset = (int8_t)json_value_get_number(val);
+                } else {
+                    MSG("WARNING: Data type for lbt_cfg.sx127x_rssi_offset seems wrong, please check (val:%p)\n", val);
+                    _lbtconf.rssi_offset = 0;
+                }
             }
             /* set LBT channels configuration */
             conf_array = json_object_get_array(conf_lbt_obj, "chan_cfg");
             if (conf_array != NULL) {
                 _lbtconf.nb_channel = json_array_get_count( conf_array );
-                MSG("INFO: %u LBT channels configured\n", _lbtconf.nb_channel);
+                MSG("INFO: %u LBT channels configured ", _lbtconf.nb_channel);
             }
             for (i = 0; i < (int)_lbtconf.nb_channel; i++) {
                 /* Sanity check */
@@ -319,6 +326,7 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
                 val = json_object_dotget_value(conf_lbtchan_obj, "freq_hz"); /* fetch value (if possible) */
                 if (json_value_get_type(val) == JSONNumber) {
                     _lbtconf.channels[i].freq_hz = (uint32_t)json_value_get_number(val);
+                    MSG("%uhz ", _lbtconf.channels[i].freq_hz);
                 } else {
                     MSG("WARNING: Data type for lbt_cfg.channels[%d].freq_hz seems wrong, please check (val:%p)\n", i, val);
                     _lbtconf.channels[i].freq_hz = 0;
@@ -328,12 +336,13 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
                 val = json_object_dotget_value(conf_lbtchan_obj, "scan_time_us"); /* fetch value (if possible) */
                 if (json_value_get_type(val) == JSONNumber) {
                     _lbtconf.channels[i].scan_time_us = (uint16_t)json_value_get_number(val);
+                    MSG("%uus ", _lbtconf.channels[i].scan_time_us );
                 } else {
                     MSG("WARNING: Data type for lbt_cfg.channels[%d].scan_time_us seems wrong, please check (val:%p)\n", i, val);
                     _lbtconf.channels[i].scan_time_us = 0;
                 }
             }
-
+            MSG("\n");
         } else {
             MSG("INFO: LBT is disabled\n");
         }
@@ -624,7 +633,7 @@ static int parse_gateway_configuration(const char * conf_file)
         return -1;
     }
 
-    /* get up and down ports (optional) */
+    /* get tcp port to server  */
     val = json_object_get_value(conf_obj, "server_port");
     if (val != NULL) {
         serv_port = json_value_get_number(val);
@@ -632,6 +641,16 @@ static int parse_gateway_configuration(const char * conf_file)
     } else {
         printf("%s: missing server_port\n", conf_obj_name);
         return -1;
+    }
+
+    val = json_object_get_value(conf_obj, "run_rate_ms");
+    if (val != NULL) {
+        unsigned int run_rate_ms = json_value_get_number(val);
+        MSG("INFO: run rate configured to %dms\n", run_rate_ms);
+        run_rate_nsec = run_rate_ms * 1000000;  /* milliseconds to nanoseconds */
+    } else {
+        printf("%s: missing run_rate_ms\n", conf_obj_name);
+        run_rate_nsec = 100000000;  /* default run rate */
     }
 
     /* packet filtering parameters */
@@ -1625,6 +1644,28 @@ void put_server_downlink(const uint8_t* const user_buf)
         }
     }
 
+    /* check dBm transmit level */
+    for (i = 0; i < txlut.size; i++) {
+        if (tx_pkt.rf_power == txlut.lut[i].rf_power) {
+            printf(" txlut%d ", i);
+            break;  // exact dBm found
+        }
+    }
+    if (i == txlut.size) {
+        /* dBm not found, use closest power availble */
+        printf("[31m%ddBm not found[0m ", tx_pkt.rf_power);
+        if (tx_pkt.rf_power < txlut.lut[0].rf_power)
+            tx_pkt.rf_power = txlut.lut[0].rf_power;
+        else {
+            for (i = txlut.size-1; i >= 0; i--) {
+                if (tx_pkt.rf_power < txlut.lut[i].rf_power) {
+                    tx_pkt.rf_power = txlut.lut[i].rf_power;
+                    break;
+                }
+            }
+        }
+    }
+
     printf(" %uhz %uus %ddBm iq_inv:%d preamble:%d nocrc:%d noheader:%d size:%u\n",
         tx_pkt.freq_hz,
         tx_pkt.count_us,
@@ -1854,7 +1895,7 @@ main (int argc, char **argv)
         perror ("clock_gettime");
 
     sleep_until.tv_sec = 0;
-    sleep_until.tv_nsec = 10000000; // 10ms rate
+    sleep_until.tv_nsec = run_rate_nsec;
     timespec_add(&sleep_until, &now, &sleep_until);
 
     for (;;) {
@@ -1869,7 +1910,7 @@ main (int argc, char **argv)
             break;
         }
         now.tv_sec = 0;
-        now.tv_nsec = MAIN_LOOP_RATE_NS;
+        now.tv_nsec = run_rate_nsec;
         timespec_add(&sleep_until, &now, &sleep_until);
 
         if (uplink_service() < 0)
