@@ -1517,7 +1517,7 @@ uplink_service()
 #define NUM_TX_PKTS     4
 struct lgw_pkt_tx_s tx_pkts[NUM_TX_PKTS];
 
-void gw_tx_service()
+void gw_tx_service(bool im)
 {
     double seconds_since_pps;
     struct timespec now;
@@ -1559,6 +1559,8 @@ void gw_tx_service()
     if (min_us_to_tx_start < TX_PRELOAD_US) {
         if (min_us_to_tx_start < 10000)
             printf("[31m");
+        if (im)
+            printf("immediatly ");
         printf("sending tx_pkts[%d] at %u (%dus before tx)[0m\n", ftbs_i, count_us_now, min_us_to_tx_start);
         i = lgw_send(tx_pkts[ftbs_i]);
         tx_pkts[ftbs_i].freq_hz = 0;    // mark as sent
@@ -1690,7 +1692,7 @@ void put_server_downlink(const uint8_t* const user_buf)
         memcpy(&tx_pkts[i], &tx_pkt, sizeof(struct lgw_pkt_tx_s));
         printf("putting tx_pkts[%d] to be sent at %u\n", i, tx_pkts[i].count_us);
         /* service immediately in case its late */
-        gw_tx_service();
+        gw_tx_service(true);
     } else if (tx_pkt.tx_mode == IMMEDIATE) {
         i = lgw_send(tx_pkt);
         if (i == LGW_HAL_ERROR) {
@@ -1943,7 +1945,7 @@ main (int argc, char **argv)
         else {
             server_downlink_service();
             if (lgw_started) {
-                gw_tx_service();
+                gw_tx_service(false);
                 service_pps();
             }
         }
