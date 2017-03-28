@@ -991,7 +991,7 @@ void put_server_downlink(const uint8_t* const user_buf)
     }
 }
 
-void
+int
 downlink_service()
 {
     uint8_t user_buf[512];
@@ -1001,7 +1001,12 @@ downlink_service()
     nbytes = read(_sock, user_buf, sizeof(user_buf));
     if (nbytes < 0) {
         perror("sock-read");
-        return;
+        return -1;
+    }
+    if (nbytes == 0) {
+        /* likely server disconnected */
+        printf("server read nbytes == 0\n");
+        return -1;
     }
     //printf("server_downlink_service() read nbytes:%d\n", nbytes);
 
@@ -1009,7 +1014,7 @@ downlink_service()
     len |= user_buf[2] << 8;
     if (len != nbytes) {
         printf("given len:%d, read len:%d\n", len, nbytes);
-        return;
+        return 0;
     }
 
     switch (user_buf[0]) {
@@ -1017,9 +1022,11 @@ downlink_service()
             put_server_downlink(user_buf);
             break;
         default:
-            printf("unhandled server cmd:%d\n", user_buf[0]);
+            printf("unhandled server cmd:%d, nbytes:%d\n", user_buf[0], nbytes);
             break;
     }
+
+    return 0;
 }
 
 static int parse_lorawan_configuration(JSON_Value *root_val)
@@ -1936,8 +1943,16 @@ main (int argc, char **argv)
                     } else {
                         printf("get_server_config() failed\n");
                     }
-                } else
-                    downlink_service();
+                } else {
+                    if (downlink_service() < 0) {
+                        lgw_stop();
+                        lgw_started = false;
+                        FD_CLR(_sock, &active_fd_set);
+                        close (_sock);
+                        connected_to_server = false;
+                        server_retry_wait_cnt = 400;
+                    }
+                }
             }
         } else if (retval != 0) {
             printf("TODO other fd\n");
