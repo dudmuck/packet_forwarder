@@ -37,6 +37,7 @@ bool lgw_started = false;
 static int8_t antenna_gain = 0;
 unsigned char mac_address[6];   /* unique identifier */
 long run_rate_usec;
+int server_retry_wait_us;  /* how long to wait before connect retry */
 
 /* TX capabilities */
 static struct lgw_tx_gain_lut_s txlut; /* TX gain table */
@@ -556,6 +557,15 @@ static int parse_gateway_configuration(const char * conf_file)
     } else {
         printf("%s: missing server_port\n", conf_obj_name);
         return -1;
+    }
+
+    val = json_object_get_value(conf_obj, "server_retry_wait_ms");
+    if (val != NULL) {
+        server_retry_wait_us = json_value_get_number(val) * 1000;
+        MSG("server_retry_wait_us:%u\n", server_retry_wait_us);
+    } else {
+        printf("%s: missing server_retry_wait_ms\n", conf_obj_name);
+        server_retry_wait_us = 4000000; // default retry
     }
 
     val = json_object_get_value(conf_obj, "run_rate_ms");
@@ -1780,7 +1790,7 @@ main (int argc, char **argv)
     uint32_t first_trig_tstamp;
     bool get_first_pps = false;
     bool receive_config = false;
-    unsigned int server_retry_wait_cnt = 0;
+    unsigned int server_retry_cnt_down = 0;
     fd_set active_fd_set;
     int maxfd, gps_tty_fd = -1; /* file descriptor of the GPS TTY port */
     int i, x;
@@ -1923,7 +1933,7 @@ main (int argc, char **argv)
                             FD_CLR(_sock, &active_fd_set);
                             close (_sock);
                             connected_to_server = false;
-                            server_retry_wait_cnt = 400;
+                            server_retry_cnt_down = server_retry_wait_us;
                         } else {
                             /* check ok */
                             if (lgw_start() == LGW_HAL_SUCCESS) {
@@ -1937,7 +1947,7 @@ main (int argc, char **argv)
                                 FD_CLR(_sock, &active_fd_set);
                                 close (_sock);
                                 connected_to_server = false;
-                                server_retry_wait_cnt = 400;
+                                server_retry_cnt_down = server_retry_wait_us;
                             }
                         }
                     } else {
@@ -1950,7 +1960,7 @@ main (int argc, char **argv)
                         FD_CLR(_sock, &active_fd_set);
                         close (_sock);
                         connected_to_server = false;
-                        server_retry_wait_cnt = 400;
+                        server_retry_cnt_down = server_retry_wait_us;
                     }
                 }
             }
@@ -1959,8 +1969,9 @@ main (int argc, char **argv)
         }
 
         if (!connected_to_server) {
-            if (server_retry_wait_cnt > 0) {
-                if (--server_retry_wait_cnt > 0)
+            if (server_retry_cnt_down > 0) {
+                server_retry_cnt_down -= run_rate_usec;
+                if (server_retry_cnt_down > 0)
                     continue;
             }
             _sock = connect_to_server();
@@ -1976,7 +1987,7 @@ main (int argc, char **argv)
                 FD_SET(_sock, &active_fd_set);
                 maxfd = MAX(gps_tty_fd, _sock) + 1;
             } else {
-                server_retry_wait_cnt = 400;
+                server_retry_cnt_down = server_retry_wait_us;
             }
         } else if (get_first_pps) {
             uint32_t trig_tstamp;
