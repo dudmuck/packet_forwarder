@@ -73,8 +73,9 @@ struct {
     uint8_t rfuOffset1;
     uint8_t rfuOffset2;
     bool us915;
+    int8_t dbm;
 } beacon_info;
-uint8_t skip_beacon_cnt = 0;    // TODO: implement user write
+unsigned int skip_beacon_cnt = 0;
 bool beacon_guard = false;
 
 #define BILLION     1000000000
@@ -1031,6 +1032,15 @@ downlink_service()
         case DOWNLINK_TX:
             put_server_downlink(user_buf);
             break;
+        case SKIP_BEACON_COUNT:
+            {
+                unsigned int idx = 3;   // skip past cmd and length
+                unsigned int* ui_ptr = (unsigned int*)&user_buf[idx];
+                skip_beacon_cnt = *ui_ptr;
+                printf("skip_beacon_cnt:%u\n", skip_beacon_cnt);
+                idx += sizeof(unsigned int);
+            }
+            break;
         default:
             printf("unhandled server cmd:%d, nbytes:%d\n", user_buf[0], nbytes);
             break;
@@ -1126,6 +1136,13 @@ static int parse_lorawan_configuration(JSON_Value *root_val)
         beacon_info.rfuOffset2 = (uint8_t)json_value_get_number(val);
     } else
         return -1;
+
+    val = json_object_get_value(conf_obj, "beacon_dbm");
+    if (json_value_get_type(val) == JSONNumber) {
+        beacon_info.dbm = json_value_get_number(val);
+        MSG("beacon_dbm:%u\n", beacon_info.dbm);
+    } else
+        beacon_info.dbm = 20;   // default tx power
 
 
     return 0;
@@ -1289,82 +1306,6 @@ _first_pps(uint32_t trig_tstamp)
     return true;
 }
 
-#if 0
-int
-first_pps()
-{
-    uint8_t beacon_period_mask = beacon_period - 1;
-    uint32_t first_trig_tstamp;
-    uint32_t trig_tstamp;
-    uint32_t seconds_to_beacon = 0;
-
-    do {
-        lgw_get_trigcnt(&first_trig_tstamp);
-        do {
-            gps_ubx_uart_service();
-            usleep(10000);
-            lgw_get_trigcnt(&trig_tstamp);
-        } while (first_trig_tstamp == trig_tstamp);
-        if (clock_gettime (CLOCK_MONOTONIC, &host_time_at_pps) == -1)
-            perror ("clock_gettime");
-
-        /* first write to prev_trig_tstamp */
-        prev_trig_tstamp = trig_tstamp;
-
-        if (gps_time_valid && time_ptr_->tv_sec != 0) {
-            seconds_to_beacon = ((time_ptr_->tv_sec | beacon_period_mask) + 1) - time_ptr_->tv_sec;
-        } else
-            printf("gps_time_valid %d, %lu\n", gps_time_valid, time_ptr_->tv_sec);
-    } while (seconds_to_beacon < 4);    // cant start too close to beacon
-
-    pps_cnt = (beacon_period - seconds_to_beacon) + 1;
-    printf("seconds_to_beacon:%u pps_cnt:%d\n", seconds_to_beacon, pps_cnt);
-    if (pps_cnt >= beacon_period) {
-        printf("%u = (%u - %u) + 1\n", pps_cnt, beacon_period, seconds_to_beacon);
-        return -1;
-    }
-    lgw_trigcnt_at_next_beacon = trig_tstamp + (seconds_to_beacon * 1000000);
-    printf(" lgw_trigcnt_at_next_beacon:%u\n", lgw_trigcnt_at_next_beacon);
-
-
-    {   /* send initial beacon info to server */
-        uint32_t buf_idx = 0;
-        uint32_t lgw_trigcnt_at_next_beacon;
-        uint32_t* u32_ptr;
-        double* dptr;
-        short* sptr;
-        uint8_t buf[sizeof(uint32_t)+sizeof(struct coord_s)];
-        uint32_t seconds_to_beacon = ((time_ptr_->tv_sec | beacon_period_mask) + 1) - time_ptr_->tv_sec;
-        lgw_trigcnt_at_next_beacon = trig_tstamp + (seconds_to_beacon * 1000000);
-        u32_ptr = (uint32_t*)buf;
-        *u32_ptr = lgw_trigcnt_at_next_beacon;
-        buf_idx += sizeof(uint32_t);
-
-        dptr = (double*)&buf[buf_idx];
-        *dptr = coord.lat;
-        buf_idx += sizeof(double);
-
-        dptr = (double*)&buf[buf_idx];
-        *dptr = coord.lon;
-        buf_idx += sizeof(double);
-
-        sptr = (short*)&buf[buf_idx];
-        *sptr = coord.alt;
-        buf_idx += sizeof(short);
-
-        if (beacon_info.us915) {
-            unsigned int sp = time_ptr_->tv_sec / beacon_period;
-            buf[buf_idx++] = sp & 7;
-        } else
-            buf[buf_idx++] = 0;
-
-        write_to_server(BEACON_INIT, buf, buf_idx);
-    }
-
-    return 0;
-}
-#endif /* #if 0 */
-
 static uint16_t BeaconCrc( uint8_t *buffer, uint16_t length )
 {
     uint16_t i;
@@ -1427,13 +1368,14 @@ load_beacon(uint32_t seconds)
     tx_pkt.coderate = CR_LORA_4_5;
     tx_pkt.bandwidth = beacon_info.bw;
     tx_pkt.datarate = beacon_info.sf;
+    tx_pkt.freq_hz = beacon_info.hz;
     if (skip_beacon_cnt > 0) {
-        /* cause beacon to fail by sending on wrong frequency */
+        /* cause beacon to be not received */
         printf("skip_beacon_cnt:%d\n", skip_beacon_cnt);
         skip_beacon_cnt--;
-        tx_pkt.freq_hz = beacon_info.hz + 450000;
+        tx_pkt.invert_pol = true;  // wrong transmit
     } else {
-        tx_pkt.freq_hz = beacon_info.hz;
+        tx_pkt.invert_pol = false;  // correct transmit
     }
 
     print_hal_sf(tx_pkt.datarate);
@@ -1442,8 +1384,7 @@ load_beacon(uint32_t seconds)
 
     tx_pkt.tx_mode = ON_GPS;
     tx_pkt.rf_chain = tx_rf_chain;
-    tx_pkt.rf_power = 20;   // TODO
-    tx_pkt.invert_pol = false;
+    tx_pkt.rf_power = beacon_info.dbm;
     tx_pkt.preamble = 10;
     tx_pkt.no_crc = true;
     tx_pkt.no_header = true;   // beacon is fixed length
@@ -1784,6 +1725,34 @@ uplink_service()
     return 0;
 }
 
+void
+stdin_read()
+{
+    int i;
+    char line[64];
+    int stdin_len = read(STDIN_FILENO, line, sizeof(line));
+
+    if (stdin_len == 2) {   // single char and newline
+        switch (line[0]) {
+            case '.':
+                printf("eui:");
+                for (i = 0; i<6; i++)
+                    printf("%02x ", mac_address[i]);
+                printf("\npps_cnt:%u\n", pps_cnt);
+                break;
+            default:
+                printf(".       print status\n");
+                printf("sb%%u       skip beacons\n");
+                break;
+        } // ..switch (line[0])
+    } else {
+        if (line[0] == 's' && line[1] == 'b') {
+            sscanf(line+2, "%u", &skip_beacon_cnt);
+            printf("skip_beacon_cnt:%u\n", skip_beacon_cnt);
+        }
+    }
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1886,6 +1855,7 @@ main (int argc, char **argv)
     }
 
     FD_ZERO(&active_fd_set);
+    FD_SET(STDIN_FILENO, &active_fd_set);
 
     /* Start GPS a.s.a.p., to allow it to lock */
     if (gps_tty_path[0] != '\0') { /* do not try to open GPS device if no path set */
@@ -1897,9 +1867,10 @@ main (int argc, char **argv)
             printf("INFO: [main] TTY port %s open for GPS synchronization\n", gps_tty_path);
             FD_SET(gps_tty_fd, &active_fd_set);
             maxfd = gps_tty_fd + 1;
-            printf("gps_tty_fd:%d\n", gps_tty_fd);
+            printf("gps_tty_fd:%d, maxfd:%d\n", gps_tty_fd, maxfd);
         }
     } else {
+        maxfd = STDIN_FILENO + 1;
         printf("WARNING: [main] GPS not opened\n");
         return -1;  /* this is class-B forwarder */
     }
@@ -1908,6 +1879,7 @@ main (int argc, char **argv)
         struct timeval timeout;
         int retval;
 
+        FD_SET(STDIN_FILENO, &active_fd_set);
         FD_SET(gps_tty_fd, &active_fd_set);
         if (connected_to_server)
             FD_SET(_sock, &active_fd_set);
@@ -1918,6 +1890,8 @@ main (int argc, char **argv)
         if (retval < 0) { 
             perror("select");
             return -1;
+        } else if (FD_ISSET(STDIN_FILENO, &active_fd_set)) {
+            stdin_read();
         } else if (FD_ISSET(gps_tty_fd, &active_fd_set)) {
             gps_service(gps_tty_fd);
         } else if (connected_to_server) {
