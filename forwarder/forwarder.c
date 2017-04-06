@@ -76,6 +76,7 @@ struct {
     int8_t dbm;
 } beacon_info;
 unsigned int skip_beacon_cnt = 0;
+unsigned int skip_downlink_cnt = 0;
 bool beacon_guard = false;
 
 #define BILLION     1000000000
@@ -861,6 +862,14 @@ void gw_tx_service(bool im)
                 printf("[31m");
             if (im)
                 printf("immediatly ");
+
+            if (skip_downlink_cnt > 0) {
+                skip_downlink_cnt--;
+                /* drop this downlink */
+                tx_pkts[ftbs_i].invert_pol = !tx_pkts[ftbs_i].invert_pol;
+                printf("[33m");
+            }
+
             printf("sending tx_pkts[%d] at %u (%dus before tx)[0m\n", ftbs_i, count_us_now, min_us_to_tx_start);
             i = lgw_send(tx_pkts[ftbs_i]);
             tx_pkts[ftbs_i].freq_hz = 0;    // mark as sent
@@ -1444,6 +1453,7 @@ int pps(uint32_t trig_tstamp)
 
     if (++pps_cnt > beacon_period) {
         printf("pps_cnt:%u\n", pps_cnt);
+        exit(EXIT_FAILURE);
         return -1;
     }
 
@@ -1743,12 +1753,16 @@ stdin_read()
             default:
                 printf(".       print status\n");
                 printf("sb%%u       skip beacons\n");
+                printf("sd%%u       skip downlinks\n");
                 break;
         } // ..switch (line[0])
     } else {
         if (line[0] == 's' && line[1] == 'b') {
             sscanf(line+2, "%u", &skip_beacon_cnt);
             printf("skip_beacon_cnt:%u\n", skip_beacon_cnt);
+        } else if (line[0] == 's' && line[1] == 'd') {
+            sscanf(line+2, "%u", &skip_downlink_cnt);
+            printf("skip_downlink_cnt:%u\n", skip_downlink_cnt);
         }
     }
 }
@@ -1939,7 +1953,12 @@ main (int argc, char **argv)
                 }
             }
         } else if (retval != 0) {
-            printf("TODO other fd\n");
+            printf("TODO other fd ");
+            if (FD_ISSET(_sock, &active_fd_set)) {
+                printf("sock");
+            }
+            printf("\n");
+            sleep(1);
         }
 
         if (!connected_to_server) {
