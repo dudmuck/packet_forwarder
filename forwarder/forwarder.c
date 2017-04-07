@@ -57,6 +57,7 @@ static bool fwd_error_pkt = false; /* packets with PAYLOAD CRC ERROR are NOT for
 /* GPS configuration and synchronization */
 static char gps_tty_path[64] = "\0"; /* path of the TTY port GPS is connected on */
 bool gps_time_valid = false;
+bool gps_pps_valid = false;
 uint8_t pps_cnt;
 uint32_t prev_trig_tstamp;
 struct timespec host_time_at_pps;
@@ -726,7 +727,7 @@ gps_service(int fd)
                                 g_gps_time.tv_sec++;
                             }
                             g_gps_time.tv_nsec = 0;
-                            //printf("gps_time:%lu.%09lu\n", g_gps_time.tv_sec, g_gps_time.tv_nsec);
+                            //printf("gps_time:%lx.%09lx\n", g_gps_time.tv_sec, g_gps_time.tv_nsec);
                             gps_time_valid = true;
                         }
                     } else {
@@ -814,22 +815,124 @@ int connect_to_server()
     return sock;
 }
 
+int
+write_to_server(uint8_t cmd, uint8_t* user_buf, uint16_t user_buf_length)
+{
+    uint8_t msg[512];
+    uint16_t* msg_len = (uint16_t*)&msg[1];
+    int nbytes;
+
+    if (!connected_to_server) {
+        printf("write_to_server() not connected\n");
+        return -1;
+    }
+
+    msg[0] = cmd;
+    *msg_len = user_buf_length + 3 + 6; // + header + mac-addr length
+    msg[3] = mac_address[0];
+    msg[4] = mac_address[1];
+    msg[5] = mac_address[2];
+    msg[6] = mac_address[3];
+    msg[7] = mac_address[4];
+    msg[8] = mac_address[5];
+
+    if (*msg_len > sizeof(msg)) {
+        printf("msg[] to small\n");
+        return -1;
+    }
+
+    if (user_buf_length > 0 && user_buf != NULL)
+        memcpy(msg+9, user_buf, user_buf_length);
+
+    nbytes = write (_sock, msg, *msg_len);
+    if (nbytes < 0) {
+        if (errno == EPIPE) {
+            printf("got EPIPE\n");
+            connected_to_server = false;
+            return -1;
+        }
+        perror ("sock-write");
+        return -1;
+    }
+    if (nbytes != *msg_len) {
+        fprintf(stderr, "incomplete server write:%d,%d\n", nbytes, *msg_len);
+        return -1;
+    }
+    return 0;
+}
+
+void
+notify_server(uint32_t tstamp_at_beacon_tx, uint32_t beacon_sent_seconds, uint8_t ch)
+{
+    double* dptr;
+    short* sptr;
+    uint32_t* u32_ptr;
+    uint8_t user_buf[8 + sizeof(struct coord_s)];
+    unsigned int buf_idx = 0;
+
+    printf("notify_server(%u, %u)\n", tstamp_at_beacon_tx, beacon_sent_seconds);
+
+    u32_ptr = (uint32_t*)&user_buf[buf_idx];
+    *u32_ptr = tstamp_at_beacon_tx;
+    buf_idx += sizeof(uint32_t);
+
+    u32_ptr = (uint32_t*)&user_buf[buf_idx];
+    *u32_ptr = beacon_sent_seconds;
+    buf_idx += sizeof(uint32_t);
+
+    dptr = (double*)&user_buf[buf_idx];
+    *dptr = coord.lat;
+    buf_idx += sizeof(double);
+
+    dptr = (double*)&user_buf[buf_idx];
+    *dptr = coord.lon;
+    buf_idx += sizeof(double);
+
+    sptr = (short*)&user_buf[buf_idx];
+    *sptr = coord.alt;
+    buf_idx += sizeof(short);
+
+    user_buf[buf_idx++] = ch;   // which channel was beacon sent on
+
+    if (write_to_server(BEACON_INDICATION, user_buf, buf_idx) < 0) {
+        printf("notify server write failed\n");
+    }
+}
+
 #define TX_PRELOAD_US           200000
 #define NUM_TX_PKTS     4
 struct lgw_pkt_tx_s tx_pkts[NUM_TX_PKTS];
 
-void gw_tx_service(bool im)
+/* return true for gps fix re-aquired */
+bool gw_tx_service(bool im)
 {
     double seconds_since_pps;
     struct timespec now;
     uint32_t count_us_now;
     int i;
+    bool ret = false;
 
     if (clock_gettime (CLOCK_MONOTONIC, &now) == -1)
         perror ("clock_gettime");
 
     /* get time difference between last host_time_at_pps and now */
     seconds_since_pps = difftimespec(now, host_time_at_pps);
+    //printf("seconds_since_pps:%f\n", seconds_since_pps);
+    if (gps_pps_valid) {
+        if (seconds_since_pps > 3.0) {
+            /* send invalid GPS time value to server indicating loss of GPS fix */
+            coord.lat = 0;
+            coord.lon = 0;
+            coord.alt = 0;
+            notify_server(0, 0xffffffff, 0);
+            printf("GPS PPS loss\n");
+            gps_pps_valid = false;
+        }
+    } else if (seconds_since_pps < 1.0) {
+        printf("GPS restored\n");
+        gps_pps_valid = true;
+        ret = true;
+    }
 
     /* get now sx1301 counter */
     count_us_now = prev_trig_tstamp + (seconds_since_pps * 1000000);
@@ -850,7 +953,7 @@ void gw_tx_service(bool im)
     }
     if (ftbs_i == -1) {
         /* nothing to be transmitted */
-        return;
+        return ret;
     }
 
     //printf("min_us_to_tx_start:%d\n", min_us_to_tx_start);
@@ -878,6 +981,8 @@ void gw_tx_service(bool im)
             }
         }
     }
+
+    return ret;
 }
 
 void put_server_downlink(const uint8_t* const user_buf)
@@ -1199,54 +1304,6 @@ get_server_config()
     return 0;
 }
 
-int
-write_to_server(uint8_t cmd, uint8_t* user_buf, uint16_t user_buf_length)
-{
-    uint8_t msg[512];
-    uint16_t* msg_len = (uint16_t*)&msg[1];
-    int nbytes;
-
-    if (!connected_to_server) {
-        printf("write_to_server() not connected\n");
-        return -1;
-    }
-
-    msg[0] = cmd;
-    *msg_len = user_buf_length + 3 + 6; // + header + mac-addr length
-    msg[3] = mac_address[0];
-    msg[4] = mac_address[1];
-    msg[5] = mac_address[2];
-    msg[6] = mac_address[3];
-    msg[7] = mac_address[4];
-    msg[8] = mac_address[5];
-
-    if (*msg_len > sizeof(msg)) {
-        printf("msg[] to small\n");
-        return -1;
-    }
-
-    if (user_buf_length > 0 && user_buf != NULL)
-        memcpy(msg+9, user_buf, user_buf_length);
-
-    nbytes = write (_sock, msg, *msg_len);
-    if (nbytes < 0) {
-        if (errno == EPIPE) {
-            printf("got EPIPE\n");
-            connected_to_server = false;
-            return -1;
-        }
-        perror ("sock-write");
-        return -1;
-    }
-    if (nbytes != *msg_len) {
-        fprintf(stderr, "incomplete server write:%d,%d\n", nbytes, *msg_len);
-        return -1;
-    }
-    return 0;
-}
-
-volatile uint32_t wbr;
-
 /* return true if done getting first pps */
 bool
 _first_pps(uint32_t trig_tstamp)
@@ -1276,7 +1333,7 @@ _first_pps(uint32_t trig_tstamp)
     }
     lgw_trigcnt_at_next_beacon = trig_tstamp + (seconds_to_beacon * 1000000);
     printf(" lgw_trigcnt_at_next_beacon:%u\n", lgw_trigcnt_at_next_beacon);
-
+    gps_pps_valid = true;
 
     {   /* send initial beacon info to server */
         uint32_t buf_idx = 0;
@@ -1406,44 +1463,6 @@ load_beacon(uint32_t seconds)
     return chan_ret;
 }
 
-void
-notify_server(uint32_t tstamp_at_beacon_tx, uint32_t beacon_sent_seconds, uint8_t ch)
-{
-    double* dptr;
-    short* sptr;
-    uint32_t* u32_ptr;
-    uint8_t user_buf[8 + sizeof(struct coord_s)];
-    unsigned int buf_idx = 0;
-
-    printf("notify_server(%u, %u)\n", tstamp_at_beacon_tx, beacon_sent_seconds);
-
-    u32_ptr = (uint32_t*)&user_buf[buf_idx];
-    *u32_ptr = tstamp_at_beacon_tx;
-    buf_idx += sizeof(uint32_t);
-
-    u32_ptr = (uint32_t*)&user_buf[buf_idx];
-    *u32_ptr = beacon_sent_seconds;
-    buf_idx += sizeof(uint32_t);
-
-    dptr = (double*)&user_buf[buf_idx];
-    *dptr = coord.lat;
-    buf_idx += sizeof(double);
-
-    dptr = (double*)&user_buf[buf_idx];
-    *dptr = coord.lon;
-    buf_idx += sizeof(double);
-
-    sptr = (short*)&user_buf[buf_idx];
-    *sptr = coord.alt;
-    buf_idx += sizeof(short);
-
-    user_buf[buf_idx++] = ch;   // which channel was beacon sent on
-
-    if (write_to_server(BEACON_INDICATION, user_buf, buf_idx) < 0) {
-        printf("notify server write failed\n");
-    }
-}
-
 int pps(uint32_t trig_tstamp)
 {
     static bool save_next_tstamp = false;
@@ -1453,7 +1472,7 @@ int pps(uint32_t trig_tstamp)
 
     if (++pps_cnt > beacon_period) {
         printf("pps_cnt:%u\n", pps_cnt);
-        exit(EXIT_FAILURE);
+        //exit(EXIT_FAILURE);
         return -1;
     }
 
@@ -1482,8 +1501,8 @@ int pps(uint32_t trig_tstamp)
 
         notify_server(tstamp_at_beacon_tx, beacon_sent_seconds.tv_sec, ch);
 
+    } else
         beacon_guard = false;
-    }
 
 
     return 0;
@@ -1749,6 +1768,7 @@ stdin_read()
                 for (i = 0; i<6; i++)
                     printf("%02x ", mac_address[i]);
                 printf("\npps_cnt:%u\n", pps_cnt);
+                printf("gps_pps_valid:%d\n", gps_pps_valid);
                 break;
             default:
                 printf(".       print status\n");
@@ -1996,7 +2016,8 @@ main (int argc, char **argv)
             service_pps();
 
             uplink_service();
-            gw_tx_service(false);
+            if (gw_tx_service(false))
+                get_first_pps = true;   // lost GPS restored
 
         }
     } // ..for (;;)
