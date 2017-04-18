@@ -809,6 +809,7 @@ int connect_to_server()
     if (0 > connect (sock, (struct sockaddr *) &servername, sizeof (servername)))
     {
         perror ("connect to server");
+        close(sock);
         return -1;
     }
 
