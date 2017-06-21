@@ -23,16 +23,27 @@
 #define STRINGIFY(x)    #x
 #define STR(x)          STRINGIFY(x)
 
+//#define GPS_CSN         0   /* which modem-chip has PPS from GPS */
+//#define TX_CSN          0   /* transmit chip select */
+#define BEACON_TX_CSN       0   /* which modem to send beacons from */
+
 /* sx1301 configuration */
-struct lgw_conf_board_s _boardconf;
-struct lgw_conf_lbt_s _lbtconf;
-struct lgw_conf_rxrf_s _rfconfs[LGW_RF_CHAIN_NB];
-struct lgw_conf_rxif_s _ifconfs[LGW_MULTI_NB];
-struct lgw_conf_rxif_s _ifconf_std;
-struct lgw_conf_rxif_s _ifconf_fsk;
-bool tx_rf_chain;   // written by sx1301 config
+static struct {
+    struct lgw_conf_board_s boardconf;
+    struct lgw_conf_lbt_s lbtconf;
+    struct lgw_conf_rxrf_s rfconfs[LGW_RF_CHAIN_NB];
+    struct lgw_conf_rxif_s ifconfs[LGW_MULTI_NB];
+    struct lgw_conf_rxif_s ifconf_std;
+    struct lgw_conf_rxif_s ifconf_fsk;
+    bool tx_rf_chain;   // written by sx1301 config
+    bool tx_invert;
+
+    /* TX capabilities */
+    struct lgw_tx_gain_lut_s txlut; /* TX gain table */
+    uint32_t tx_freq_min[LGW_RF_CHAIN_NB]; /* lowest frequency supported by TX chain */
+    uint32_t tx_freq_max[LGW_RF_CHAIN_NB]; /* highest frequency supported by TX chain */
+} cs[2];
 bool lgw_started = false;
-bool tx_invert;
 
 /* Gateway specificities */
 static int8_t antenna_gain = 0;
@@ -40,10 +51,6 @@ unsigned char mac_address[6];   /* unique identifier */
 long run_rate_usec;
 int server_retry_wait_us;  /* how long to wait before connect retry */
 
-/* TX capabilities */
-static struct lgw_tx_gain_lut_s txlut; /* TX gain table */
-static uint32_t tx_freq_min[LGW_RF_CHAIN_NB]; /* lowest frequency supported by TX chain */
-static uint32_t tx_freq_max[LGW_RF_CHAIN_NB]; /* highest frequency supported by TX chain */
 
 static char serv_addr[64] = STR(DEFAULT_SERVER); /* address of the server (host name or IPv4/IPv6) */
 static uint16_t serv_port = DEFAULT_PORT;
@@ -60,7 +67,7 @@ static char gps_tty_path[64] = "\0"; /* path of the TTY port GPS is connected on
 bool gps_time_valid = false;
 bool gps_pps_valid = false;
 uint8_t pps_cnt;
-uint32_t prev_trig_tstamp;
+uint32_t prev_trig_tstamp[2];
 struct timespec host_time_at_pps;
 
 /* Reference coordinates, for broadcasting (beacon) */
@@ -156,12 +163,12 @@ int get_host_unique_id()
     return 0;
 }
 
-static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_val)
+static int parse_SX1301_configuration(uint8_t csn, char* const conf_file, JSON_Value *root_val)
 {
     int i;
     char param_name[32]; /* used to generate variable parameter names */
     const char *str; /* used to store string value from JSON object */
-    const char conf_obj_name[] = "SX1301_conf";
+    const char* conf_obj_name;
     JSON_Object *conf_obj = NULL;
     JSON_Object *conf_lbt_obj = NULL;
     JSON_Object *conf_lbtchan_obj = NULL;
@@ -169,7 +176,12 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
     JSON_Array *conf_array = NULL;
     uint32_t sf, bw, fdev;
 
-    printf("parse_SX1301_configuration()\n");
+    printf("parse_SX1301_configuration(%u)\n", csn);
+
+    if (csn == 0)
+        conf_obj_name = "SX1301_confA";
+    else
+        conf_obj_name = "SX1301_confB";
 
     /* point to the gateway configuration object */
     conf_obj = json_object_get_object(json_value_get_object(root_val), conf_obj_name);
@@ -183,61 +195,61 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
     /* set board configuration */
     val = json_object_get_value(conf_obj, "lorawan_public"); /* fetch value (if possible) */
     if (json_value_get_type(val) == JSONBoolean) {
-        _boardconf.lorawan_public = (bool)json_value_get_boolean(val);
+        cs[csn].boardconf.lorawan_public = (bool)json_value_get_boolean(val);
     }
 
     val = json_object_get_value(conf_obj, "tx_invert"); /* fetch value (if possible) */
     if (json_value_get_type(val) == JSONBoolean) {
-        tx_invert = (bool)json_value_get_boolean(val);
+        cs[csn].tx_invert = (bool)json_value_get_boolean(val);
     }
 
     val = json_object_get_value(conf_obj, "clksrc"); /* fetch value (if possible) */
     if (json_value_get_type(val) == JSONNumber) {
-        _boardconf.clksrc = (uint8_t)json_value_get_number(val);
+        cs[csn].boardconf.clksrc = (uint8_t)json_value_get_number(val);
     }
 
     /* set LBT configuration */
     conf_lbt_obj = json_object_get_object(conf_obj, "lbt_cfg"); /* fetch value (if possible) */
     if (conf_lbt_obj == NULL) {
-        MSG("INFO: no configuration for LBT\n");
+        MSG("%u) INFO: no configuration for LBT\n", csn);
     } else {
         val = json_object_get_value(conf_lbt_obj, "enable"); /* fetch value (if possible) */
         if (val != NULL) {
             if (json_value_get_type(val) == JSONBoolean) {
-                _lbtconf.enable = (bool)json_value_get_boolean(val);
+                cs[csn].lbtconf.enable = (bool)json_value_get_boolean(val);
             } else {
                 MSG("WARNING: Data type for lbt_cfg.enable seems wrong, please check (val:%p)\n", val);
-                _lbtconf.enable = false;
+                cs[csn].lbtconf.enable = false;
             }
         }
 
 
-        if (_lbtconf.enable == true) {
+        if (cs[csn].lbtconf.enable == true) {
             val = json_object_get_value(conf_lbt_obj, "rssi_target"); /* fetch value (if possible) */
             if (val != NULL) {
                 if (json_value_get_type(val) == JSONNumber) {
-                    _lbtconf.rssi_target = (int8_t)json_value_get_number(val);
+                    cs[csn].lbtconf.rssi_target = (int8_t)json_value_get_number(val);
                 } else {
                     MSG("WARNING: Data type for lbt_cfg.rssi_target seems wrong, please check (val:%p)\n", val);
-                    _lbtconf.rssi_target = 0;
+                    cs[csn].lbtconf.rssi_target = 0;
                 }
             }
             val = json_object_get_value(conf_lbt_obj, "sx127x_rssi_offset"); /* fetch value (if possible) */
             if (val != NULL) {
                 if (json_value_get_type(val) == JSONNumber) {
-                    _lbtconf.rssi_offset = (int8_t)json_value_get_number(val);
+                    cs[csn].lbtconf.rssi_offset = (int8_t)json_value_get_number(val);
                 } else {
                     MSG("WARNING: Data type for lbt_cfg.sx127x_rssi_offset seems wrong, please check (val:%p)\n", val);
-                    _lbtconf.rssi_offset = 0;
+                    cs[csn].lbtconf.rssi_offset = 0;
                 }
             }
             /* set LBT channels configuration */
             conf_array = json_object_get_array(conf_lbt_obj, "chan_cfg");
             if (conf_array != NULL) {
-                _lbtconf.nb_channel = json_array_get_count( conf_array );
-                MSG("INFO: %u LBT channels configured ", _lbtconf.nb_channel);
+                cs[csn].lbtconf.nb_channel = json_array_get_count( conf_array );
+                MSG("%u) INFO: %u LBT channels configured ", csn, cs[csn].lbtconf.nb_channel);
             }
-            for (i = 0; i < (int)_lbtconf.nb_channel; i++) {
+            for (i = 0; i < (int)cs[csn].lbtconf.nb_channel; i++) {
                 /* Sanity check */
                 if (i >= LBT_CHANNEL_FREQ_NB)
                 {
@@ -250,26 +262,26 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
                 /* Channel frequency */
                 val = json_object_dotget_value(conf_lbtchan_obj, "freq_hz"); /* fetch value (if possible) */
                 if (json_value_get_type(val) == JSONNumber) {
-                    _lbtconf.channels[i].freq_hz = (uint32_t)json_value_get_number(val);
-                    MSG("%uhz ", _lbtconf.channels[i].freq_hz);
+                    cs[csn].lbtconf.channels[i].freq_hz = (uint32_t)json_value_get_number(val);
+                    MSG("%uhz ", cs[csn].lbtconf.channels[i].freq_hz);
                 } else {
                     MSG("WARNING: Data type for lbt_cfg.channels[%d].freq_hz seems wrong, please check (val:%p)\n", i, val);
-                    _lbtconf.channels[i].freq_hz = 0;
+                    cs[csn].lbtconf.channels[i].freq_hz = 0;
                 }
 
                 /* Channel scan time */
                 val = json_object_dotget_value(conf_lbtchan_obj, "scan_time_us"); /* fetch value (if possible) */
                 if (json_value_get_type(val) == JSONNumber) {
-                    _lbtconf.channels[i].scan_time_us = (uint16_t)json_value_get_number(val);
-                    MSG("%uus ", _lbtconf.channels[i].scan_time_us );
+                    cs[csn].lbtconf.channels[i].scan_time_us = (uint16_t)json_value_get_number(val);
+                    MSG("%uus ", cs[csn].lbtconf.channels[i].scan_time_us );
                 } else {
                     MSG("WARNING: Data type for lbt_cfg.channels[%d].scan_time_us seems wrong, please check (val:%p)\n", i, val);
-                    _lbtconf.channels[i].scan_time_us = 0;
+                    cs[csn].lbtconf.channels[i].scan_time_us = 0;
                 }
             }
             MSG("\n");
         } else {
-            MSG("INFO: LBT is disabled\n");
+            MSG("%u) INFO: LBT is disabled\n", csn);
         }
     }
 
@@ -283,7 +295,7 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
             antenna_gain = 0;
         }
     }
-    MSG("INFO: antenna_gain %d dBi\n", antenna_gain);
+    MSG("%u) INFO: antenna_gain %d dBi\n", csn, antenna_gain);
 
     /* set configuration for tx gains */
     for (i = 0; i < TX_GAIN_LUT_SIZE_MAX; i++) {
@@ -296,12 +308,12 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
             MSG("INFO: no configuration for tx gain lut %i (val:%p)\n", i, val);
             continue;
         }
-        txlut.size++; /* update TX LUT size based on JSON object found in configuration file */
+        cs[csn].txlut.size++; /* update TX LUT size based on JSON object found in configuration file */
         /* there is an object to configure that TX gain index, let's parse it */
         snprintf(param_name, sizeof param_name, "tx_lut_%i.pa_gain", i);
         val = json_object_dotget_value(conf_obj, param_name);
         if (json_value_get_type(val) == JSONNumber) {
-            txlut.lut[i].pa_gain = (uint8_t)json_value_get_number(val);
+            cs[csn].txlut.lut[i].pa_gain = (uint8_t)json_value_get_number(val);
         } /*else {
             MSG("WARNING: Data type for %s[%d] seems wrong, please check\n", param_name, i);
             txlut.lut[i].pa_gain = 0;
@@ -309,14 +321,14 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
         snprintf(param_name, sizeof param_name, "tx_lut_%i.dac_gain", i);
         val = json_object_dotget_value(conf_obj, param_name);
         if (json_value_get_type(val) == JSONNumber) {
-            txlut.lut[i].dac_gain = (uint8_t)json_value_get_number(val);
+            cs[csn].txlut.lut[i].dac_gain = (uint8_t)json_value_get_number(val);
         } else {
-            txlut.lut[i].dac_gain = 3; /* This is the only dac_gain supported for now */
+            cs[csn].txlut.lut[i].dac_gain = 3; /* This is the only dac_gain supported for now */
         }
         snprintf(param_name, sizeof param_name, "tx_lut_%i.dig_gain", i);
         val = json_object_dotget_value(conf_obj, param_name);
         if (json_value_get_type(val) == JSONNumber) {
-            txlut.lut[i].dig_gain = (uint8_t)json_value_get_number(val);
+            cs[csn].txlut.lut[i].dig_gain = (uint8_t)json_value_get_number(val);
         } /*else {
             MSG("WARNING: Data type for %s[%d] seems wrong, please check\n", param_name, i);
             txlut.lut[i].dig_gain = 0;
@@ -324,7 +336,7 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
         snprintf(param_name, sizeof param_name, "tx_lut_%i.mix_gain", i);
         val = json_object_dotget_value(conf_obj, param_name);
         if (json_value_get_type(val) == JSONNumber) {
-            txlut.lut[i].mix_gain = (uint8_t)json_value_get_number(val);
+            cs[csn].txlut.lut[i].mix_gain = (uint8_t)json_value_get_number(val);
         } /*else {
             MSG("WARNING: Data type for %s[%d] seems wrong, please check\n", param_name, i);
             txlut.lut[i].mix_gain = 0;
@@ -332,7 +344,7 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
         snprintf(param_name, sizeof param_name, "tx_lut_%i.rf_power", i);
         val = json_object_dotget_value(conf_obj, param_name);
         if (json_value_get_type(val) == JSONNumber) {
-            txlut.lut[i].rf_power = (int8_t)json_value_get_number(val);
+            cs[csn].txlut.lut[i].rf_power = (int8_t)json_value_get_number(val);
         } /*else {
             MSG("WARNING: Data type for %s[%d] seems wrong, please check\n", param_name, i);
             txlut.lut[i].rf_power = 0;
@@ -352,34 +364,34 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
         val = json_object_dotget_value(conf_obj, param_name);
         if (val != NULL) {
             if (json_value_get_type(val) == JSONBoolean) {
-                _rfconfs[i].enable = (bool)json_value_get_boolean(val);
+                cs[csn].rfconfs[i].enable = (bool)json_value_get_boolean(val);
             } else {
                 MSG("ERR: radio_%d.enable not boolean\n", i);
-                _rfconfs[i].enable = false;
+                cs[csn].rfconfs[i].enable = false;
             }
         }
 
-        if (_rfconfs[i].enable == false) { /* radio disabled, nothing else to parse */
-            MSG("INFO: radio %i disabled\n", i);
+        if (cs[csn].rfconfs[i].enable == false) { /* radio disabled, nothing else to parse */
+            MSG("%u) INFO: radio %i disabled\n", csn, i);
         } else  { /* radio enabled, will parse the other parameters */
 
             snprintf(param_name, sizeof param_name, "radio_%i.rssi_offset", i);
             if (json_object_dotget_value(conf_obj, param_name) != NULL) {
-                _rfconfs[i].rssi_offset = (float)json_object_dotget_number(conf_obj, param_name);
+                cs[csn].rfconfs[i].rssi_offset = (float)json_object_dotget_number(conf_obj, param_name);
             }
 
             snprintf(param_name, sizeof param_name, "radio_%i.freq", i);
             if (json_object_dotget_value(conf_obj, param_name) != NULL) {
-                _rfconfs[i].freq_hz = (uint32_t)json_object_dotget_number(conf_obj, param_name);
+                cs[csn].rfconfs[i].freq_hz = (uint32_t)json_object_dotget_number(conf_obj, param_name);
             }
 
             snprintf(param_name, sizeof param_name, "radio_%i.type", i);
             str = json_object_dotget_string(conf_obj, param_name);
             if (str != NULL) {
                 if (!strncmp(str, "SX1255", 6)) {
-                    _rfconfs[i].type = LGW_RADIO_TYPE_SX1255;
+                    cs[csn].rfconfs[i].type = LGW_RADIO_TYPE_SX1255;
                 } else if (!strncmp(str, "SX1257", 6)) {
-                    _rfconfs[i].type = LGW_RADIO_TYPE_SX1257;
+                    cs[csn].rfconfs[i].type = LGW_RADIO_TYPE_SX1257;
                 } else {
                     MSG("WARNING: invalid radio type: %s (should be SX1255 or SX1257)\n", str);
                 }
@@ -388,30 +400,30 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
             val = json_object_dotget_value(conf_obj, param_name);
             if (val != NULL) {
                 if (json_value_get_type(val) == JSONBoolean) {
-                    _rfconfs[i].tx_enable = (bool)json_value_get_boolean(val);
-                    if (_rfconfs[i].tx_enable == true) {
-                        tx_rf_chain = i;
+                    cs[csn].rfconfs[i].tx_enable = (bool)json_value_get_boolean(val);
+                    if (cs[csn].rfconfs[i].tx_enable == true) {
+                        cs[csn].tx_rf_chain = i;
                         /* tx is enabled on this rf chain, we need its frequency range */
                         snprintf(param_name, sizeof param_name, "radio_%i.tx_freq_min", i);
-                        tx_freq_min[i] = (uint32_t)json_object_dotget_number(conf_obj, param_name);
+                        cs[csn].tx_freq_min[i] = (uint32_t)json_object_dotget_number(conf_obj, param_name);
                         snprintf(param_name, sizeof param_name, "radio_%i.tx_freq_max", i);
-                        tx_freq_max[i] = (uint32_t)json_object_dotget_number(conf_obj, param_name);
-                        if ((tx_freq_min[i] == 0) || (tx_freq_max[i] == 0)) {
+                        cs[csn].tx_freq_max[i] = (uint32_t)json_object_dotget_number(conf_obj, param_name);
+                        if ((cs[csn].tx_freq_min[i] == 0) || (cs[csn].tx_freq_max[i] == 0)) {
                             MSG("WARNING: no frequency range specified for TX rf chain %d\n", i);
                         }
                         /* ... and the notch filter frequency to be set */
                         snprintf(param_name, sizeof param_name, "radio_%i.tx_notch_freq", i);
-                        _rfconfs[i].tx_notch_freq = (uint32_t)json_object_dotget_number(conf_obj, param_name);
+                        cs[csn].rfconfs[i].tx_notch_freq = (uint32_t)json_object_dotget_number(conf_obj, param_name);
                     }
                 } else {
-                    _rfconfs[i].tx_enable = false;
+                    cs[csn].rfconfs[i].tx_enable = false;
                 }
             }
-            if (_rfconfs[i].type == LGW_RADIO_TYPE_SX1255)
-                MSG("INFO SX1255: ");
-            else if (_rfconfs[i].type == LGW_RADIO_TYPE_SX1257)
-                MSG("INFO SX1257: ");
-            MSG("radio %i enabled, center frequency %u, RSSI offset %f, tx enabled %d, tx_notch_freq %u\n", i, _rfconfs[i].freq_hz, _rfconfs[i].rssi_offset, _rfconfs[i].tx_enable, _rfconfs[i].tx_notch_freq);
+            if (cs[csn].rfconfs[i].type == LGW_RADIO_TYPE_SX1255)
+                MSG("%u) INFO SX1255: ", csn);
+            else if (cs[csn].rfconfs[i].type == LGW_RADIO_TYPE_SX1257)
+                MSG("%u) INFO SX1257: ", csn);
+            MSG("radio %i enabled, center frequency %u, RSSI offset %f, tx enabled %d, tx_notch_freq %u\n", i, cs[csn].rfconfs[i].freq_hz, cs[csn].rfconfs[i].rssi_offset, cs[csn].rfconfs[i].tx_enable, cs[csn].rfconfs[i].tx_notch_freq);
         }
     } // ..for (i = 0; i < LGW_RF_CHAIN_NB; ++i)
 
@@ -422,63 +434,63 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
         if (val == NULL)
             continue;
         if (json_value_get_type(val) != JSONObject) {
-            MSG("INFO: no configuration for Lora multi-SF channel %i\n", i);
+            MSG("%u) INFO: no configuration for Lora multi-SF channel %i\n", csn, i);
             continue;
         }
         /* there is an object to configure that Lora multi-SF channel, let's parse it */
         snprintf(param_name, sizeof param_name, "chan_multiSF_%i.enable", i);
         val = json_object_dotget_value(conf_obj, param_name);
         if (json_value_get_type(val) == JSONBoolean) {
-            _ifconfs[i].enable = (bool)json_value_get_boolean(val);
+            cs[csn].ifconfs[i].enable = (bool)json_value_get_boolean(val);
         } else {
-            _ifconfs[i].enable = false;
+            cs[csn].ifconfs[i].enable = false;
         }
-        if (_ifconfs[i].enable == false) { /* Lora multi-SF channel disabled, nothing else to parse */
-            MSG("INFO: Lora multi-SF channel %i disabled\n", i);
+        if (cs[csn].ifconfs[i].enable == false) { /* Lora multi-SF channel disabled, nothing else to parse */
+            MSG("%u) INFO: Lora multi-SF channel %i disabled\n", i, csn);
         } else  { /* Lora multi-SF channel enabled, will parse the other parameters */
             snprintf(param_name, sizeof param_name, "chan_multiSF_%i.radio", i);
-            _ifconfs[i].rf_chain = (uint32_t)json_object_dotget_number(conf_obj, param_name);
+            cs[csn].ifconfs[i].rf_chain = (uint32_t)json_object_dotget_number(conf_obj, param_name);
             snprintf(param_name, sizeof param_name, "chan_multiSF_%i.if", i);
-            _ifconfs[i].freq_hz = (int32_t)json_object_dotget_number(conf_obj, param_name);
+            cs[csn].ifconfs[i].freq_hz = (int32_t)json_object_dotget_number(conf_obj, param_name);
             // TODO: handle individual SF enabling and disabling (spread_factor)
-            MSG("INFO: Lora multi-SF channel %i>  radio %i, IF %i Hz, 125 kHz bw, SF 7 to 12\n", i, _ifconfs[i].rf_chain, _ifconfs[i].freq_hz);
+            MSG("INFO: Lora multi-SF channel %i>  radio %i, IF %i Hz, 125 kHz bw, SF 7 to 12\n", i, cs[csn].ifconfs[i].rf_chain, cs[csn].ifconfs[i].freq_hz);
         }
     }
 
     /* set configuration for Lora standard channel */
     val = json_object_get_value(conf_obj, "chan_Lora_std"); /* fetch value (if possible) */
     if (json_value_get_type(val) != JSONObject) {
-        MSG("INFO: no configuration for Lora standard channel\n");
+        MSG("%u) INFO: no configuration for Lora standard channel\n", csn);
     } else {
         val = json_object_dotget_value(conf_obj, "chan_Lora_std.enable");
         if (json_value_get_type(val) == JSONBoolean) {
-            _ifconf_std.enable = (bool)json_value_get_boolean(val);
+            cs[csn].ifconf_std.enable = (bool)json_value_get_boolean(val);
         } else {
-            _ifconf_std.enable = false;
+            cs[csn].ifconf_std.enable = false;
         }
-        if (_ifconf_std.enable == false) {
-            MSG("INFO: Lora standard channel %i disabled\n", i);
+        if (cs[csn].ifconf_std.enable == false) {
+            MSG("%u) INFO: Lora standard channel %i disabled\n", csn, i);
         } else  {
-            _ifconf_std.rf_chain = (uint32_t)json_object_dotget_number(conf_obj, "chan_Lora_std.radio");
-            _ifconf_std.freq_hz = (int32_t)json_object_dotget_number(conf_obj, "chan_Lora_std.if");
+            cs[csn].ifconf_std.rf_chain = (uint32_t)json_object_dotget_number(conf_obj, "chan_Lora_std.radio");
+            cs[csn].ifconf_std.freq_hz = (int32_t)json_object_dotget_number(conf_obj, "chan_Lora_std.if");
             bw = (uint32_t)json_object_dotget_number(conf_obj, "chan_Lora_std.bandwidth");
             switch(bw) {
-                case 500000: _ifconf_std.bandwidth = BW_500KHZ; break;
-                case 250000: _ifconf_std.bandwidth = BW_250KHZ; break;
-                case 125000: _ifconf_std.bandwidth = BW_125KHZ; break;
-                default: _ifconf_std.bandwidth = BW_UNDEFINED;
+                case 500000: cs[csn].ifconf_std.bandwidth = BW_500KHZ; break;
+                case 250000: cs[csn].ifconf_std.bandwidth = BW_250KHZ; break;
+                case 125000: cs[csn].ifconf_std.bandwidth = BW_125KHZ; break;
+                default: cs[csn].ifconf_std.bandwidth = BW_UNDEFINED;
             }
             sf = (uint32_t)json_object_dotget_number(conf_obj, "chan_Lora_std.spread_factor");
             switch(sf) {
-                case  7: _ifconf_std.datarate = DR_LORA_SF7;  break;
-                case  8: _ifconf_std.datarate = DR_LORA_SF8;  break;
-                case  9: _ifconf_std.datarate = DR_LORA_SF9;  break;
-                case 10: _ifconf_std.datarate = DR_LORA_SF10; break;
-                case 11: _ifconf_std.datarate = DR_LORA_SF11; break;
-                case 12: _ifconf_std.datarate = DR_LORA_SF12; break;
-                default: _ifconf_std.datarate = DR_UNDEFINED;
+                case  7: cs[csn].ifconf_std.datarate = DR_LORA_SF7;  break;
+                case  8: cs[csn].ifconf_std.datarate = DR_LORA_SF8;  break;
+                case  9: cs[csn].ifconf_std.datarate = DR_LORA_SF9;  break;
+                case 10: cs[csn].ifconf_std.datarate = DR_LORA_SF10; break;
+                case 11: cs[csn].ifconf_std.datarate = DR_LORA_SF11; break;
+                case 12: cs[csn].ifconf_std.datarate = DR_LORA_SF12; break;
+                default: cs[csn].ifconf_std.datarate = DR_UNDEFINED;
             }
-            MSG("INFO: Lora std channel> radio %i, IF %i Hz, %u Hz bw, SF %u\n", _ifconf_std.rf_chain, _ifconf_std.freq_hz, bw, sf);
+            MSG("%u) INFO: Lora std channel> radio %i, IF %i Hz, %u Hz bw, SF %u\n", csn, cs[csn].ifconf_std.rf_chain, cs[csn].ifconf_std.freq_hz, bw, sf);
         }
     }
 
@@ -486,38 +498,38 @@ static int _parse_SX1301_configuration(char* const conf_file, JSON_Value *root_v
     val = json_object_get_value(conf_obj, "chan_FSK"); /* fetch value (if possible) */
     printf("chan_FSK object: %p\n", val);
     if (json_value_get_type(val) != JSONObject) {
-        MSG("INFO: no configuration for FSK channel\n");
+        MSG("%u) INFO: no configuration for FSK channel\n", csn);
     } else {
         val = json_object_dotget_value(conf_obj, "chan_FSK.enable");
         if (json_value_get_type(val) == JSONBoolean) {
-            _ifconf_fsk.enable = (bool)json_value_get_boolean(val);
+            cs[csn].ifconf_fsk.enable = (bool)json_value_get_boolean(val);
         } else {
-            _ifconf_fsk.enable = false;
+            cs[csn].ifconf_fsk.enable = false;
         }
-        if (_ifconf_fsk.enable == false) {
-            MSG("INFO: FSK channel %i disabled\n", i);
+        if (cs[csn].ifconf_fsk.enable == false) {
+            MSG("%u) INFO: FSK channel %i disabled\n", csn, i);
         } else  {
-            _ifconf_fsk.rf_chain = (uint32_t)json_object_dotget_number(conf_obj, "chan_FSK.radio");
-            _ifconf_fsk.freq_hz = (int32_t)json_object_dotget_number(conf_obj, "chan_FSK.if");
+            cs[csn].ifconf_fsk.rf_chain = (uint32_t)json_object_dotget_number(conf_obj, "chan_FSK.radio");
+            cs[csn].ifconf_fsk.freq_hz = (int32_t)json_object_dotget_number(conf_obj, "chan_FSK.if");
             bw = (uint32_t)json_object_dotget_number(conf_obj, "chan_FSK.bandwidth");
             fdev = (uint32_t)json_object_dotget_number(conf_obj, "chan_FSK.freq_deviation");
-            _ifconf_fsk.datarate = (uint32_t)json_object_dotget_number(conf_obj, "chan_FSK.datarate");
+            cs[csn].ifconf_fsk.datarate = (uint32_t)json_object_dotget_number(conf_obj, "chan_FSK.datarate");
 
             /* if chan_FSK.bandwidth is set, it has priority over chan_FSK.freq_deviation */
             if ((bw == 0) && (fdev != 0)) {
-                bw = 2 * fdev + _ifconf_fsk.datarate;
+                bw = 2 * fdev + cs[csn].ifconf_fsk.datarate;
             }
-            if      (bw == 0)      _ifconf_fsk.bandwidth = BW_UNDEFINED;
-            else if (bw <= 7800)   _ifconf_fsk.bandwidth = BW_7K8HZ;
-            else if (bw <= 15600)  _ifconf_fsk.bandwidth = BW_15K6HZ;
-            else if (bw <= 31200)  _ifconf_fsk.bandwidth = BW_31K2HZ;
-            else if (bw <= 62500)  _ifconf_fsk.bandwidth = BW_62K5HZ;
-            else if (bw <= 125000) _ifconf_fsk.bandwidth = BW_125KHZ;
-            else if (bw <= 250000) _ifconf_fsk.bandwidth = BW_250KHZ;
-            else if (bw <= 500000) _ifconf_fsk.bandwidth = BW_500KHZ;
-            else _ifconf_fsk.bandwidth = BW_UNDEFINED;
+            if      (bw == 0)      cs[csn].ifconf_fsk.bandwidth = BW_UNDEFINED;
+            else if (bw <= 7800)   cs[csn].ifconf_fsk.bandwidth = BW_7K8HZ;
+            else if (bw <= 15600)  cs[csn].ifconf_fsk.bandwidth = BW_15K6HZ;
+            else if (bw <= 31200)  cs[csn].ifconf_fsk.bandwidth = BW_31K2HZ;
+            else if (bw <= 62500)  cs[csn].ifconf_fsk.bandwidth = BW_62K5HZ;
+            else if (bw <= 125000) cs[csn].ifconf_fsk.bandwidth = BW_125KHZ;
+            else if (bw <= 250000) cs[csn].ifconf_fsk.bandwidth = BW_250KHZ;
+            else if (bw <= 500000) cs[csn].ifconf_fsk.bandwidth = BW_500KHZ;
+            else cs[csn].ifconf_fsk.bandwidth = BW_UNDEFINED;
 
-            MSG("INFO: FSK channel> radio %i, IF %i Hz, %u Hz bw, %u bps datarate\n", _ifconf_fsk.rf_chain, _ifconf_fsk.freq_hz, bw, _ifconf_fsk.datarate);
+            MSG("%u) INFO: FSK channel> radio %i, IF %i Hz, %u Hz bw, %u bps datarate\n", csn, cs[csn].ifconf_fsk.rf_chain, cs[csn].ifconf_fsk.freq_hz, bw, cs[csn].ifconf_fsk.datarate);
         }
     }
 
@@ -908,14 +920,15 @@ notify_server(uint32_t tstamp_at_beacon_tx, uint32_t beacon_sent_seconds, uint8_
 
 #define TX_PRELOAD_US           200000
 #define NUM_TX_PKTS     4
-struct lgw_pkt_tx_s tx_pkts[NUM_TX_PKTS];
+struct lgw_pkt_tx_s _tx_pkts[NUM_TX_PKTS];
+uint8_t tx_modem_idx[NUM_TX_PKTS];
 
 /* return true for gps fix re-aquired */
 bool gw_tx_service(bool im)
 {
     double seconds_since_pps;
     struct timespec now;
-    uint32_t count_us_now;
+    uint32_t count_us_now[2];
     int i;
     bool ret = false;
 
@@ -942,15 +955,16 @@ bool gw_tx_service(bool im)
     }
 
     /* get now sx1301 counter */
-    count_us_now = prev_trig_tstamp + (seconds_since_pps * 1000000);
+    count_us_now[0] = prev_trig_tstamp[0] + (seconds_since_pps * 1000000);
+    count_us_now[1] = prev_trig_tstamp[1] + (seconds_since_pps * 1000000);
     //printf("count_us_now:%u ", count_us_now);
 
     /* compare count_us of waiting tx packets to count_us_now */
     int32_t min_us_to_tx_start = 0x7fffffff;
     int ftbs_i = -1;
     for (i = 0; i < NUM_TX_PKTS; i++) {
-        if (tx_pkts[i].freq_hz != 0) {
-            int32_t us_to_tx_start = tx_pkts[i].count_us - count_us_now;
+        if (_tx_pkts[i].freq_hz != 0) {
+            int32_t us_to_tx_start = _tx_pkts[i].count_us - count_us_now[tx_modem_idx[i]];
             //printf("us_to_tx_start:%d\n", us_to_tx_start);
             if (us_to_tx_start < min_us_to_tx_start) {
                 min_us_to_tx_start = us_to_tx_start;
@@ -969,20 +983,20 @@ bool gw_tx_service(bool im)
             printf("[31mskipping tx due to beacon_guard[0m\n");
         } else {
             if (min_us_to_tx_start < 10000)
-                printf("[31m");
+                printf("[31m ");
             if (im)
                 printf("immediatly ");
 
             if (skip_downlink_cnt > 0) {
                 skip_downlink_cnt--;
                 /* drop this downlink */
-                tx_pkts[ftbs_i].invert_pol = !tx_pkts[ftbs_i].invert_pol;
+                _tx_pkts[ftbs_i].invert_pol = !_tx_pkts[ftbs_i].invert_pol;
                 printf("[33m");
             }
 
-            printf("sending tx_pkts[%d] at %u (%dus before tx)[0m\n", ftbs_i, count_us_now, min_us_to_tx_start);
-            i = lgw_send(tx_pkts[ftbs_i]);
-            tx_pkts[ftbs_i].freq_hz = 0;    // mark as sent
+            printf("modem%u sending tx_pkts[%d] at %u (%dus before tx)[0m\n", tx_modem_idx[ftbs_i], ftbs_i, count_us_now[tx_modem_idx[ftbs_i]], min_us_to_tx_start);
+            i = lgw_send(tx_modem_idx[ftbs_i], _tx_pkts[ftbs_i]);
+            _tx_pkts[ftbs_i].freq_hz = 0;    // mark as sent
             if (i == LGW_HAL_ERROR) {
                 printf("lgw_send() failed\n");
             }
@@ -999,6 +1013,7 @@ void put_server_downlink(const uint8_t* const user_buf)
     uint16_t* u16_ptr;
     unsigned int idx = 3;   // skip past cmd and length
     struct lgw_pkt_tx_s tx_pkt;
+    uint8_t modem_idx;
 
     u32_ptr = (uint32_t*)&user_buf[idx];
     tx_pkt.freq_hz = *u32_ptr;
@@ -1011,7 +1026,7 @@ void put_server_downlink(const uint8_t* const user_buf)
     idx += sizeof(tx_pkt.count_us);
 
     idx++;  // rf_chain from server ignored
-    tx_pkt.rf_chain = tx_rf_chain;
+    //later -- tx_pkt.rf_chain = cs[TX_CSN].tx_rf_chain;
     tx_pkt.rf_power = user_buf[idx++];
     tx_pkt.modulation = user_buf[idx++];
     tx_pkt.bandwidth = user_buf[idx++];
@@ -1022,7 +1037,6 @@ void put_server_downlink(const uint8_t* const user_buf)
 
     tx_pkt.coderate = user_buf[idx++];
     tx_pkt.invert_pol = user_buf[idx++];
-
     tx_pkt.f_dev = user_buf[idx++];
 
     u16_ptr = (uint16_t*)&user_buf[idx];
@@ -1041,17 +1055,17 @@ void put_server_downlink(const uint8_t* const user_buf)
         return;
     }
 
-    if (tx_invert)
-        tx_pkt.invert_pol = !tx_pkt.invert_pol;
-
     memcpy(&tx_pkt.payload, user_buf+idx, tx_pkt.size);
     idx += tx_pkt.size;
 
-    uint8_t tx_modem_idx = user_buf[idx++];
-    if (tx_modem_idx != 0) {
-        /* only one modem exists */
-        fprintf(stderr, "FAIL modem_idx:%u ", tx_modem_idx);
+    modem_idx = user_buf[idx++];
+    if (modem_idx > 1) {
+        printf("bad modem_idx:%u\n", modem_idx);
+        return;
     }
+    tx_pkt.rf_chain = cs[modem_idx].tx_rf_chain;
+    if (cs[modem_idx].tx_invert)
+        tx_pkt.invert_pol = !tx_pkt.invert_pol;
 
     printf("downlink_tx() ");
     switch (tx_pkt.tx_mode) {
@@ -1079,21 +1093,21 @@ void put_server_downlink(const uint8_t* const user_buf)
     }
 
     /* check dBm transmit level */
-    for (i = 0; i < txlut.size; i++) {
-        if (tx_pkt.rf_power == txlut.lut[i].rf_power) {
+    for (i = 0; i < cs[modem_idx].txlut.size; i++) {
+        if (tx_pkt.rf_power == cs[modem_idx].txlut.lut[i].rf_power) {
             printf(" txlut%d ", i);
             break;  // exact dBm found
         }
     }
-    if (i == txlut.size) {
+    if (i == cs[modem_idx].txlut.size) {
         /* dBm not found, use closest power availble */
         printf("[31m%ddBm not found[0m ", tx_pkt.rf_power);
-        if (tx_pkt.rf_power < txlut.lut[0].rf_power)
-            tx_pkt.rf_power = txlut.lut[0].rf_power;
+        if (tx_pkt.rf_power < cs[modem_idx].txlut.lut[0].rf_power)
+            tx_pkt.rf_power = cs[modem_idx].txlut.lut[0].rf_power;
         else {
-            for (i = txlut.size-1; i >= 0; i--) {
-                if (tx_pkt.rf_power < txlut.lut[i].rf_power) {
-                    tx_pkt.rf_power = txlut.lut[i].rf_power;
+            for (i = cs[modem_idx].txlut.size-1; i >= 0; i--) {
+                if (tx_pkt.rf_power < cs[modem_idx].txlut.lut[i].rf_power) {
+                    tx_pkt.rf_power = cs[modem_idx].txlut.lut[i].rf_power;
                     break;
                 }
             }
@@ -1113,7 +1127,7 @@ void put_server_downlink(const uint8_t* const user_buf)
 
     if (tx_pkt.tx_mode == TIMESTAMPED) {
         for (i = 0; i < NUM_TX_PKTS; i++) {
-            if (tx_pkts[i].freq_hz == 0)
+            if (_tx_pkts[i].freq_hz == 0)
                 break;
         }
         if (i == NUM_TX_PKTS) {
@@ -1121,12 +1135,13 @@ void put_server_downlink(const uint8_t* const user_buf)
             return;
         }
 
-        memcpy(&tx_pkts[i], &tx_pkt, sizeof(struct lgw_pkt_tx_s));
-        printf("putting tx_pkts[%d] to be sent at %u\n", i, tx_pkts[i].count_us);
+        memcpy(&_tx_pkts[i], &tx_pkt, sizeof(struct lgw_pkt_tx_s));
+        tx_modem_idx[i] = modem_idx;
+        printf("%u) putting tx_pkts[%d] to be sent at %u\n", modem_idx, i, _tx_pkts[i].count_us);
         /* service immediately in case its late */
         gw_tx_service(true);
     } else if (tx_pkt.tx_mode == IMMEDIATE) {
-        i = lgw_send(tx_pkt);
+        i = lgw_send(modem_idx, tx_pkt);
         if (i == LGW_HAL_ERROR) {
             printf("lgw_send() failed\n");
         }
@@ -1282,7 +1297,7 @@ static int parse_lorawan_configuration(JSON_Value *root_val)
 int
 get_server_config()
 {
-    char file_buf[4096];
+    char file_buf[8192];
     int file_length;
     int nbytes;
     int n_read;
@@ -1292,11 +1307,11 @@ get_server_config()
     /* first 4 bytes is length */
     nbytes = read(_sock, &file_length, sizeof(int));
     if (nbytes < 0) {
-        perror("get_server_config() read()");
+        perror("get_server_config() read");
         return -1;
     }
     if (nbytes == 0) {
-        fprintf(stderr, "get_server_config() read file_length 0\n");
+        fprintf(stderr, "get_server_config() read file_length zero\n");
         return -1;
     }
     printf("conf file_length got nbytes %d: %d\n", nbytes, file_length);
@@ -1304,11 +1319,11 @@ get_server_config()
     for (n_read = 0; n_read < file_length; ) {
         nbytes = read(_sock, file_buf+n_read, sizeof(file_buf)-n_read);
         if (nbytes < 0) {
-            perror("read");
+            perror("get_server_config() read");
             return -1;
         }
         if (nbytes == 0) {
-            printf("nbytes==0\n");
+            fprintf(stderr, "get_server_config() read file_length\n");
             return -1;
         }
         n_read += nbytes;
@@ -1322,7 +1337,11 @@ get_server_config()
         MSG("ERROR: server-conf not a valid JSON string\n");
         return -1;
     } else {
-        int x = _parse_SX1301_configuration("(from-server)", root_val);
+        int x = parse_SX1301_configuration(0, "(from-server)", root_val);
+        if (x != 0)
+            return -1;
+
+        x = parse_SX1301_configuration(1, "(from-server)", root_val);
         if (x != 0)
             return -1;
 
@@ -1342,6 +1361,7 @@ get_server_config()
 bool
 _first_pps(uint32_t trig_tstamp)
 {
+    uint32_t trig_tstamp1;
     uint32_t lgw_trigcnt_at_next_beacon;
     uint8_t beacon_period_mask = beacon_period - 1;
     uint32_t seconds_to_beacon = 0;
@@ -1357,7 +1377,9 @@ _first_pps(uint32_t trig_tstamp)
     if (clock_gettime (CLOCK_MONOTONIC, &host_time_at_pps) == -1)
         perror ("clock_gettime");
 
-    prev_trig_tstamp = trig_tstamp;
+    prev_trig_tstamp[0] = trig_tstamp;
+    lgw_get_trigcnt(1, &trig_tstamp1);
+    prev_trig_tstamp[1] = trig_tstamp1;
 
     pps_cnt = (beacon_period - seconds_to_beacon) + 1;
     printf("seconds_to_beacon:%u pps_cnt:%d\n", seconds_to_beacon, pps_cnt);
@@ -1400,7 +1422,7 @@ _first_pps(uint32_t trig_tstamp)
         } else
             buf[buf_idx++] = 0;
 
-        buf[buf_idx++] = 0; /* which modem is sending beacons */
+        buf[buf_idx++] = BEACON_TX_CSN;
 
         write_to_server(BEACON_INIT, buf, buf_idx);
     }
@@ -1480,7 +1502,7 @@ load_beacon(uint32_t seconds)
         tx_pkt.invert_pol = false;  // correct transmit
     }
 
-    if (tx_invert)
+    if (cs[BEACON_TX_CSN].tx_invert)
         tx_pkt.invert_pol = !tx_pkt.invert_pol;
 
     print_hal_sf(tx_pkt.datarate);
@@ -1488,14 +1510,14 @@ load_beacon(uint32_t seconds)
     printf(" %.1fMHz\n", tx_pkt.freq_hz / 1e6);
 
     tx_pkt.tx_mode = ON_GPS;
-    tx_pkt.rf_chain = tx_rf_chain;
+    tx_pkt.rf_chain = cs[BEACON_TX_CSN].tx_rf_chain;
     tx_pkt.rf_power = beacon_info.dbm;
     tx_pkt.preamble = 10;
     tx_pkt.no_crc = true;
     tx_pkt.no_header = true;   // beacon is fixed length
 
     printf("BEACON: ");
-    if (lgw_send(tx_pkt) == LGW_HAL_ERROR) {
+    if (lgw_send(BEACON_TX_CSN, tx_pkt) == LGW_HAL_ERROR) {
         printf("lgw_send() failed\n");
     }
 
@@ -1551,11 +1573,14 @@ void
 service_pps()
 {
     uint32_t trig_tstamp;
+    uint32_t trig_tstamp1;
     struct timespec saved;
 
-    /*int i =*/ lgw_get_trigcnt(&trig_tstamp);
-    if (prev_trig_tstamp == trig_tstamp)
+    lgw_get_trigcnt(0, &trig_tstamp);
+    if (prev_trig_tstamp[0] == trig_tstamp)
         return;
+
+    lgw_get_trigcnt(1, &trig_tstamp1);
 
     saved.tv_sec = host_time_at_pps.tv_sec;
     saved.tv_nsec = host_time_at_pps.tv_nsec;
@@ -1565,22 +1590,26 @@ service_pps()
     if (!gps_time_valid)
         printf("pps diff:%f\n", difftimespec(host_time_at_pps, saved));
 
-    prev_trig_tstamp = trig_tstamp;
+    prev_trig_tstamp[0] = trig_tstamp;
+    prev_trig_tstamp[1] = trig_tstamp1;
     /* pps pulse occurred */
     //printf("pps %u\n", trig_tstamp);
     pps(trig_tstamp);
+
+    // modem-1 was started after modem-0, so modem-0 will have larger number
+    //printf("trig_tstamp:%d\r\n", trig_tstamp - trig_tstamp1);
 }
 
-int check_sx1301_config()
+int check_sx1301_config(uint8_t csn)
 {
     int i;
 
-    MSG("#### check_sx1301_config(): lorawan_public %d, clksrc %d txlut.size:%d #####\n", _boardconf.lorawan_public, _boardconf.clksrc, txlut.size);
+    MSG("#### check_sx1301_config(%u): lorawan_public %d, clksrc %d txlut.size:%d #####\n", csn, cs[csn].boardconf.lorawan_public, cs[csn].boardconf.clksrc, cs[csn].txlut.size);
 
     /* all parameters parsed, submitting configuration to the HAL */
-    if (txlut.size > 0) {
-        MSG("INFO: Configuring TX LUT with %u indexes\n", txlut.size);
-        if (lgw_txgain_setconf(&txlut) != LGW_HAL_SUCCESS) {
+    if (cs[csn].txlut.size > 0) {
+        MSG("INFO: Configuring TX LUT with %u indexes\n", cs[csn].txlut.size);
+        if (lgw_txgain_setconf(csn, &cs[csn].txlut) != LGW_HAL_SUCCESS) {
             MSG("ERROR: Failed to configure concentrator TX Gain LUT\n");
             return -1;
         }
@@ -1589,28 +1618,28 @@ int check_sx1301_config()
     }
 
     /* all parameters parsed, submitting configuration to the HAL */
-    if (lgw_board_setconf(_boardconf) != LGW_HAL_SUCCESS) {
+    if (lgw_board_setconf(csn, cs[csn].boardconf) != LGW_HAL_SUCCESS) {
         MSG("ERROR: Failed to configure board\n");
         return -1;
     }
 
-    if (_lbtconf.enable == true) {
+    if (cs[csn].lbtconf.enable == true) {
        /* all parameters parsed, submitting configuration to the HAL */
-        if (lgw_lbt_setconf(_lbtconf) != LGW_HAL_SUCCESS) {
+        if (lgw_lbt_setconf(csn, cs[csn].lbtconf) != LGW_HAL_SUCCESS) {
             MSG("ERROR: Failed to configure LBT\n");
             return -1;
         }
     }
 
     for (i = 0; i < LGW_RF_CHAIN_NB; ++i) {
-        if (_rfconfs[i].enable) {
-            if (_rfconfs[i].type == LGW_RADIO_TYPE_SX1255)
+        if (cs[csn].rfconfs[i].enable) {
+            if (cs[csn].rfconfs[i].type == LGW_RADIO_TYPE_SX1255)
                 MSG("INFO SX1255: ");
-            else if (_rfconfs[i].type == LGW_RADIO_TYPE_SX1257)
+            else if (cs[csn].rfconfs[i].type == LGW_RADIO_TYPE_SX1257)
                 MSG("INFO SX1257: ");
-            MSG("radio %i enabled, center frequency %u, RSSI offset %f, tx enabled %d, tx_notch_freq %u\n", i, _rfconfs[i].freq_hz, _rfconfs[i].rssi_offset, _rfconfs[i].tx_enable, _rfconfs[i].tx_notch_freq);
+            MSG("radio %i enabled, center frequency %u, RSSI offset %f, tx enabled %d, tx_notch_freq %u\n", i, cs[csn].rfconfs[i].freq_hz, cs[csn].rfconfs[i].rssi_offset, cs[csn].rfconfs[i].tx_enable, cs[csn].rfconfs[i].tx_notch_freq);
             /* all parameters parsed, submitting configuration to the HAL */
-            if (lgw_rxrf_setconf(i, _rfconfs[i]) != LGW_HAL_SUCCESS) {
+            if (lgw_rxrf_setconf(csn, i, cs[csn].rfconfs[i]) != LGW_HAL_SUCCESS) {
                 MSG("ERROR: invalid configuration for radio %i\n", i);
                 return -1;
             }
@@ -1618,26 +1647,26 @@ int check_sx1301_config()
     }
 
     for (i = 0; i < LGW_MULTI_NB; ++i) {
-        if (_ifconfs[i].enable) {
-            int r = _ifconfs[i].rf_chain;
-            MSG("INFO: Lora multi-SF ch%i>  radio %i, IF %iHz=%uhz, 125 kHz bw, SF 7 to 12\n", i, r, _ifconfs[i].freq_hz, _rfconfs[r].freq_hz + _ifconfs[i].freq_hz);
+        if (cs[csn].ifconfs[i].enable) {
+            int r = cs[csn].ifconfs[i].rf_chain;
+            MSG("INFO: Lora multi-SF ch%i>  radio %i, IF %iHz=%uhz, 125 kHz bw, SF 7 to 12\n", i, r, cs[csn].ifconfs[i].freq_hz, cs[csn].rfconfs[r].freq_hz + cs[csn].ifconfs[i].freq_hz);
             /* all parameters parsed, submitting configuration to the HAL */
-            if (lgw_rxif_setconf(i, _ifconfs[i]) != LGW_HAL_SUCCESS) {
+            if (lgw_rxif_setconf(csn, i, cs[csn].ifconfs[i]) != LGW_HAL_SUCCESS) {
                 MSG("ERROR: invalid configuration for Lora multi-SF channel %i\n", i);
                 return -1;
             }
         }
     }
 
-    if (_ifconf_std.enable) {
+    if (cs[csn].ifconf_std.enable) {
         unsigned int r, bw = 0, sf;
-        switch (_ifconf_std.bandwidth) {
+        switch (cs[csn].ifconf_std.bandwidth) {
             case BW_500KHZ: bw = 500; break;
             case BW_250KHZ: bw = 250; break;
             case BW_125KHZ: bw = 125; break;
             case BW_UNDEFINED: bw = 0; break;
         }
-        switch (_ifconf_std.datarate) {
+        switch (cs[csn].ifconf_std.datarate) {
             case DR_LORA_SF7: sf = 7; break;
             case DR_LORA_SF8: sf = 8; break;
             case DR_LORA_SF9: sf = 9; break;
@@ -1646,17 +1675,17 @@ int check_sx1301_config()
             case DR_LORA_SF12: sf = 12; break;
             default: sf = 0; break;
         }
-        r = _ifconf_std.rf_chain;
-        MSG("INFO: Lora std channel> radio %i, IF %iHz=%u, %uKHz bw, SF %u\n", r, _ifconf_std.freq_hz, _rfconfs[r].freq_hz + _ifconf_std.freq_hz,bw, sf);
-        if (lgw_rxif_setconf(8, _ifconf_std) != LGW_HAL_SUCCESS) {
+        r = cs[csn].ifconf_std.rf_chain;
+        MSG("INFO: Lora std channel> radio %i, IF %iHz=%u, %uKHz bw, SF %u\n", r, cs[csn].ifconf_std.freq_hz, cs[csn].rfconfs[r].freq_hz + cs[csn].ifconf_std.freq_hz,bw, sf);
+        if (lgw_rxif_setconf(csn, 8, cs[csn].ifconf_std) != LGW_HAL_SUCCESS) {
             MSG("ERROR: invalid configuration for Lora standard channel\n");
             return -1;
         }
     }
 
-    if (_ifconf_fsk.enable) {
-        MSG("INFO: FSK channel> radio %i, IF %i Hz, bw:0x%x, %u bps datarate\n", _ifconf_fsk.rf_chain, _ifconf_fsk.freq_hz, _ifconf_fsk.bandwidth, _ifconf_fsk.datarate);
-        if (lgw_rxif_setconf(9, _ifconf_fsk) != LGW_HAL_SUCCESS) {
+    if (cs[csn].ifconf_fsk.enable) {
+        MSG("INFO: FSK channel> radio %i, IF %i Hz, bw:0x%x, %u bps datarate\n", cs[csn].ifconf_fsk.rf_chain,  cs[csn].ifconf_fsk.freq_hz,  cs[csn].ifconf_fsk.bandwidth, cs[csn].ifconf_fsk.datarate);
+        if (lgw_rxif_setconf(csn, 9, cs[csn].ifconf_fsk) != LGW_HAL_SUCCESS) {
             MSG("ERROR: invalid configuration for FSK channel\n");
             return -1;
         }
@@ -1667,7 +1696,7 @@ int check_sx1301_config()
 
 #define NB_PKT_MAX      8 /* max number of packets per fetch/send cycle */
 int
-uplink_service()
+uplink_service(uint8_t csn)
 {
     int i;
     int nb_pkt;
@@ -1676,7 +1705,7 @@ uplink_service()
     if (!lgw_started)
         return 0;
 
-    nb_pkt = lgw_receive(NB_PKT_MAX, rxpkt);
+    nb_pkt = lgw_receive(csn, NB_PKT_MAX, rxpkt);
     if (nb_pkt == LGW_HAL_ERROR) {
         MSG("ERROR: [up] failed packet fetch\n");
         return -1;
@@ -1737,7 +1766,7 @@ uplink_service()
         u32_ptr = (uint32_t*)&user_buf[buf_idx];
         *u32_ptr = p->freq_hz;
         buf_idx += sizeof(p->freq_hz);
-        printf("rx freq_hz:%u ", *u32_ptr);
+        printf("%u) rx freq_hz:%u ", csn, *u32_ptr);
 
         user_buf[buf_idx++] = p->if_chain;
         user_buf[buf_idx++] = p->status;
@@ -1778,16 +1807,17 @@ uplink_service()
         buf_idx += sizeof(p->size);
 
         if (p->size > sizeof(p->payload)) {
-            printf("oversized %u\n", p->size);
+            printf("oversized %u", p->size);
             continue;
         } else
-            printf("size:%u\n", p->size);
+            printf("size:%u", p->size);
 
+        printf(" at %uus\n", p->count_us);
 
         memcpy(user_buf+buf_idx, p->payload, p->size);
         buf_idx += p->size;
 
-        user_buf[buf_idx++] = 0;    /* which modem receiving (always 0) */
+        user_buf[buf_idx++] = csn;  /* which modem receiving */
 
         write_to_server(UPLINK, user_buf, buf_idx);
     } // ..for (i = 0; i < nb_pkt; ++i)
@@ -1828,6 +1858,17 @@ stdin_read()
     }
 }
 
+void
+clear_conf(uint8_t csn)
+{
+    memset(&cs[csn].boardconf, 0, sizeof(struct lgw_conf_board_s)); /* initialize configuration structure */
+    memset(&cs[csn].lbtconf, 0, sizeof(struct lgw_conf_lbt_s)); /* initialize configuration structure */
+    memset(&cs[csn].rfconfs, 0, sizeof(struct lgw_conf_rxrf_s)); /* initialize configuration structure */
+    memset(&cs[csn].ifconfs, 0, sizeof(struct lgw_conf_rxif_s)); /* initialize configuration structure */
+    memset(&cs[csn].ifconf_std, 0, sizeof(struct lgw_conf_rxif_s)); /* initialize configuration structure */
+    memset(&cs[csn].ifconf_fsk, 0, sizeof(struct lgw_conf_rxif_s)); /* initialize configuration structure */
+}
+
 int
 main (int argc, char **argv)
 {
@@ -1839,9 +1880,9 @@ main (int argc, char **argv)
     int maxfd, gps_tty_fd = -1; /* file descriptor of the GPS TTY port */
     int i, x;
     JSON_Value *root_val;
-    char *global_cfg_path= "../global_conf.json"; /* contain global (typ. network-wide) configuration */
-    char *local_cfg_path = "../local_conf.json"; /* contain node specific configuration, overwrite global parameters for parameters that are defined in both */
-    char *debug_cfg_path = "../debug_conf.json"; /* if present, all other configuration files are ignored */
+    char *global_cfg_path= "../dual_global_conf.json"; /* contain global (typ. network-wide) configuration */
+    char *local_cfg_path = "../dual_local_conf.json"; /* contain node specific configuration, overwrite global parameters for parameters that are defined in both */
+    char *debug_cfg_path = "../dual_debug_conf.json"; /* if present, all other configuration files are ignored */
 
     if (get_host_unique_id() < 0) {
         return -1;
@@ -1851,12 +1892,8 @@ main (int argc, char **argv)
     signal(SIGPIPE, SIG_IGN);
 
     /* clear gateway configuration */
-    memset(&_boardconf, 0, sizeof _boardconf); /* initialize configuration structure */
-    memset(&_lbtconf, 0, sizeof _lbtconf); /* initialize configuration structure */
-    memset(&_rfconfs, 0, sizeof _rfconfs); /* initialize configuration structure */
-    memset(&_ifconfs, 0, sizeof _ifconfs); /* initialize configuration structure */
-    memset(&_ifconf_std, 0, sizeof _ifconf_std); /* initialize configuration structure */
-    memset(&_ifconf_fsk, 0, sizeof _ifconf_fsk); /* initialize configuration structure */
+    clear_conf(0);
+    clear_conf(1);
 
     /* load configuration files */
     if (access(debug_cfg_path, R_OK) == 0) { /* if there is a debug conf, parse only the debug conf */
@@ -1867,7 +1904,11 @@ main (int argc, char **argv)
             MSG("ERROR: %s is not a valid JSON file\n", debug_cfg_path);
             exit(EXIT_FAILURE);
         }
-        x = _parse_SX1301_configuration(debug_cfg_path, root_val);
+        x = parse_SX1301_configuration(0, debug_cfg_path, root_val);
+        if (x != 0) {
+            exit(EXIT_FAILURE);
+        }
+        x = parse_SX1301_configuration(1, debug_cfg_path, root_val);
         if (x != 0) {
             exit(EXIT_FAILURE);
         }
@@ -1884,7 +1925,11 @@ main (int argc, char **argv)
             MSG("ERROR: %s is not a valid JSON file\n", global_cfg_path);
             exit(EXIT_FAILURE);
         }
-        x = _parse_SX1301_configuration(global_cfg_path, root_val);
+        x = parse_SX1301_configuration(0, global_cfg_path, root_val);
+        if (x != 0) {
+            exit(EXIT_FAILURE);
+        }
+        x = parse_SX1301_configuration(1, global_cfg_path, root_val);
         if (x != 0) {
             exit(EXIT_FAILURE);
         }
@@ -1902,7 +1947,8 @@ main (int argc, char **argv)
                 MSG("ERROR: %s is not a valid JSON file\n", local_cfg_path);
                 exit(EXIT_FAILURE);
             }
-            _parse_SX1301_configuration(local_cfg_path, root_val);
+            parse_SX1301_configuration(0, local_cfg_path, root_val);
+            parse_SX1301_configuration(1, local_cfg_path, root_val);
             json_value_free(root_val);
 
             parse_gateway_configuration(local_cfg_path);
@@ -1914,7 +1960,11 @@ main (int argc, char **argv)
             MSG("ERROR: %s is not a valid JSON file\n", local_cfg_path);
             exit(EXIT_FAILURE);
         }
-        x = _parse_SX1301_configuration(local_cfg_path, root_val);
+        x = parse_SX1301_configuration(0, local_cfg_path, root_val);
+        if (x != 0) {
+            exit(EXIT_FAILURE);
+        }
+        x = parse_SX1301_configuration(1, local_cfg_path, root_val);
         if (x != 0) {
             exit(EXIT_FAILURE);
         }
@@ -1976,7 +2026,7 @@ main (int argc, char **argv)
                         printf("get_server_config() OK\n");
                         receive_config = false;
 
-                        if (check_sx1301_config() < 0) {
+                        if (check_sx1301_config(0) < 0 || check_sx1301_config(1) < 0 ) {
                             /* check failed */
                             printf("config check failed\n");
                             FD_CLR(_sock, &active_fd_set);
@@ -1985,11 +2035,11 @@ main (int argc, char **argv)
                             server_retry_cnt_down = server_retry_wait_us;
                         } else {
                             /* check ok */
-                            if (lgw_start() == LGW_HAL_SUCCESS) {
+                            if (lgw_start(0) == LGW_HAL_SUCCESS && lgw_start(1) == LGW_HAL_SUCCESS) {
                                 MSG("INFO: [main] concentrator started, packet can now be received\n");
                                 lgw_started = true;
                                 get_first_pps = true;
-                                lgw_get_trigcnt(&first_trig_tstamp);
+                                lgw_get_trigcnt(0, &first_trig_tstamp);
                             } else {
                                 lgw_started = false;
                                 MSG("ERROR: [main] failed to start the concentrator\n");
@@ -2008,7 +2058,8 @@ main (int argc, char **argv)
                     }
                 } else {
                     if (downlink_service() < 0) {
-                        lgw_stop();
+                        lgw_stop(0);
+                        lgw_stop(1);
                         lgw_started = false;
                         FD_CLR(_sock, &active_fd_set);
                         close (_sock);
@@ -2037,7 +2088,7 @@ main (int argc, char **argv)
                 uint8_t buf[8];
                 uint32_t* u32_ptr = (uint32_t*)buf;
                 *u32_ptr = PROT_VER;
-                buf[4] = 1; /* num_modems: one sx1301 */
+                buf[4] = 2; /* num_modems: two sx1301 */
                 printf("server-connected\n");
                 connected_to_server = true;
 
@@ -2052,7 +2103,7 @@ main (int argc, char **argv)
             }
         } else if (get_first_pps) {
             uint32_t trig_tstamp;
-            lgw_get_trigcnt(&trig_tstamp);
+            lgw_get_trigcnt(0, &trig_tstamp);
             if (trig_tstamp != first_trig_tstamp) {
                 if (_first_pps(trig_tstamp)) {
                     get_first_pps = false; // done getting first pps
@@ -2063,7 +2114,8 @@ main (int argc, char **argv)
             /* connected to server and concentrator running */
             service_pps();
 
-            uplink_service();
+            uplink_service(0);
+            uplink_service(1);
             if (gw_tx_service(false))
                 get_first_pps = true;   // lost GPS restored
 
