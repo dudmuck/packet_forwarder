@@ -1037,6 +1037,12 @@ void put_server_downlink(const uint8_t* const user_buf)
     memcpy(&tx_pkt.payload, user_buf+idx, tx_pkt.size);
     idx += tx_pkt.size;
 
+    uint8_t tx_modem_idx = user_buf[idx++];
+    if (tx_modem_idx != 0) {
+        /* only one modem exists */
+        fprintf(stderr, "FAIL modem_idx:%u ", tx_modem_idx);
+    }
+
     printf("downlink_tx() ");
     switch (tx_pkt.tx_mode) {
         case IMMEDIATE: printf("IMMEDIATE"); break;
@@ -1383,6 +1389,8 @@ _first_pps(uint32_t trig_tstamp)
             buf[buf_idx++] = sp & 7;
         } else
             buf[buf_idx++] = 0;
+
+        buf[buf_idx++] = 0; /* which modem is sending beacons */
 
         write_to_server(BEACON_INIT, buf, buf_idx);
     }
@@ -1765,6 +1773,8 @@ uplink_service()
 
         memcpy(user_buf+buf_idx, p->payload, p->size);
         buf_idx += p->size;
+
+        user_buf[buf_idx++] = 0;    /* which modem receiving (always 0) */
 
         write_to_server(UPLINK, user_buf, buf_idx);
     } // ..for (i = 0; i < nb_pkt; ++i)
