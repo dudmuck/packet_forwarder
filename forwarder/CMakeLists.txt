@@ -5,21 +5,33 @@ include_directories(../../lora_gateway/libloragw/inc)
 
 add_definitions(-DENABLE_HAL_UBX)
 
-list(APPEND forwarder_sources
-    ${CMAKE_CURRENT_SOURCE_DIR}/forwarder.c
-    ${CMAKE_CURRENT_SOURCE_DIR}/parson.c
-)
-
 find_library(MATH_LIB m)
 find_library(P_LIB pthread)
 
-add_executable(forwarder ${forwarder_sources})
-
-target_link_libraries(forwarder 
-    ${CMAKE_CURRENT_SOURCE_DIR}/../../lora_gateway/libloragw/libloragw.a
-    ${MATH_LIB}
-    ${P_LIB}
+list(APPEND forwarder_sources
+    ${CMAKE_CURRENT_SOURCE_DIR}/parson.c
 )
 
+if (16ch)
+    list(APPEND forwarder_sources
+        ${CMAKE_CURRENT_SOURCE_DIR}/forwarder_16ch.c
+    )
+    add_executable(forwarder_16ch ${forwarder_sources})
+    target_link_libraries(forwarder_16ch
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../lora_gateway/libloragw/libloragw.a
+        ${MATH_LIB}
+        ${P_LIB}
+    )
+else (16ch)
+    list(APPEND forwarder_sources
+        ${CMAKE_CURRENT_SOURCE_DIR}/forwarder.c
+    )
+    add_executable(forwarder ${forwarder_sources})
+    target_link_libraries(forwarder
+        ${CMAKE_CURRENT_SOURCE_DIR}/../../lora_gateway/libloragw/libloragw.a
+        ${MATH_LIB}
+        ${P_LIB}
+    )
+endif (16ch)
 
 
