@@ -1283,16 +1283,33 @@ get_server_config()
     JSON_Value *root_val = NULL;
 
     /* configuration available */
-    printf("have configuration\n");
     /* first 4 bytes is length */
     nbytes = read(_sock, &file_length, sizeof(int));
+    if (nbytes < 0) {
+        perror("get_server_config() read()");
+        return -1;
+    }
+    if (nbytes == 0) {
+        fprintf(stderr, "get_server_config() read file_length 0\n");
+        return -1;
+    }
     printf("conf file_length got nbytes %d: %d\n", nbytes, file_length);
 
     for (n_read = 0; n_read < file_length; ) {
         nbytes = read(_sock, file_buf+n_read, sizeof(file_buf)-n_read);
+        if (nbytes < 0) {
+            perror("read");
+            return -1;
+        }
+        if (nbytes == 0) {
+            printf("nbytes==0\n");
+            return -1;
+        }
         n_read += nbytes;
         printf("n_read:%d\n", n_read);
     }
+
+    printf("have configuration\n");
 
     root_val = json_parse_string_with_comments(file_buf);
     if (root_val == NULL) {
@@ -1974,6 +1991,10 @@ main (int argc, char **argv)
                         }
                     } else {
                         printf("get_server_config() failed\n");
+                        FD_CLR(_sock, &active_fd_set);
+                        close (_sock);
+                        connected_to_server = false;
+                        sleep(4);
                     }
                 } else {
                     if (downlink_service() < 0) {
@@ -2003,12 +2024,15 @@ main (int argc, char **argv)
             }
             _sock = connect_to_server();
             if (_sock >= 0) {
-                uint32_t u32 = PROT_VER;
+                uint8_t buf[8];
+                uint32_t* u32_ptr = (uint32_t*)buf;
+                *u32_ptr = PROT_VER;
+                buf[4] = 1; /* num_modems: one sx1301 */
                 printf("server-connected\n");
                 connected_to_server = true;
 
                 /* request config from server */
-                write_to_server(REQ_CONF, (uint8_t*)&u32, sizeof(uint32_t));
+                write_to_server(REQ_CONF, buf, sizeof(uint32_t)+1);
 
                 receive_config = true;
                 FD_SET(_sock, &active_fd_set);
