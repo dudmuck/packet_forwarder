@@ -966,10 +966,10 @@ bool gw_tx_service(bool im)
     //printf("min_us_to_tx_start:%d\n", min_us_to_tx_start);
     if (min_us_to_tx_start < TX_PRELOAD_US) {
         if (beacon_guard) {
-            printf("[31mskipping tx due to beacon_guard[0m\n");
+            printf("\e[31mskipping tx due to beacon_guard\e[0m\n");
         } else {
             if (min_us_to_tx_start < 10000)
-                printf("[31m");
+                printf("\e[31m");
             if (im)
                 printf("immediatly ");
 
@@ -977,10 +977,10 @@ bool gw_tx_service(bool im)
                 skip_downlink_cnt--;
                 /* drop this downlink */
                 tx_pkts[ftbs_i].invert_pol = !tx_pkts[ftbs_i].invert_pol;
-                printf("[33m");
+                printf("\e[33m");
             }
 
-            printf("sending tx_pkts[%d] at %u (%dus before tx)[0m\n", ftbs_i, count_us_now, min_us_to_tx_start);
+            printf("sending tx_pkts[%d] at %u (%dus before tx)\e[0m\n", ftbs_i, count_us_now, min_us_to_tx_start);
             i = lgw_send(tx_pkts[ftbs_i]);
             tx_pkts[ftbs_i].freq_hz = 0;    // mark as sent
             if (i == LGW_HAL_ERROR) {
@@ -1087,7 +1087,7 @@ void put_server_downlink(const uint8_t* const user_buf)
     }
     if (i == txlut.size) {
         /* dBm not found, use closest power availble */
-        printf("[31m%ddBm not found[0m ", tx_pkt.rf_power);
+        printf("\e[31m%ddBm not found\e[0m ", tx_pkt.rf_power);
         if (tx_pkt.rf_power < txlut.lut[0].rf_power)
             tx_pkt.rf_power = txlut.lut[0].rf_power;
         else {
@@ -1340,7 +1340,7 @@ get_server_config()
 
 /* return true if done getting first pps */
 bool
-_first_pps(uint32_t trig_tstamp)
+first_pps(uint32_t trig_tstamp)
 {
     uint32_t lgw_trigcnt_at_next_beacon;
     uint8_t beacon_period_mask = beacon_period - 1;
@@ -1360,7 +1360,7 @@ _first_pps(uint32_t trig_tstamp)
     prev_trig_tstamp = trig_tstamp;
 
     pps_cnt = (beacon_period - seconds_to_beacon) + 1;
-    printf("seconds_to_beacon:%u pps_cnt:%d\n", seconds_to_beacon, pps_cnt);
+    printf("seconds_to_beacon:%u pps_cnt:%d, %lu\n", seconds_to_beacon, pps_cnt, time_ptr_->tv_sec);
     if (pps_cnt >= beacon_period) {
         printf("%u = (%u - %u) + 1\n", pps_cnt, beacon_period, seconds_to_beacon);
         return -1;
@@ -1375,11 +1375,16 @@ _first_pps(uint32_t trig_tstamp)
         uint32_t* u32_ptr;
         double* dptr;
         short* sptr;
-        uint8_t buf[sizeof(uint32_t)+sizeof(struct coord_s)];
+        uint8_t buf[sizeof(uint32_t)+sizeof(uint32_t)+sizeof(struct coord_s)];
         uint32_t seconds_to_beacon = ((time_ptr_->tv_sec | beacon_period_mask) + 1) - time_ptr_->tv_sec;
         lgw_trigcnt_at_next_beacon = trig_tstamp + (seconds_to_beacon * 1000000);
         u32_ptr = (uint32_t*)buf;
         *u32_ptr = lgw_trigcnt_at_next_beacon;
+        buf_idx += sizeof(uint32_t);
+
+        u32_ptr = (uint32_t*)&buf[buf_idx];
+        // when beacon would have been sent if gateway was already running
+        *u32_ptr = time_ptr_->tv_sec + (seconds_to_beacon - beacon_period);
         buf_idx += sizeof(uint32_t);
 
         dptr = (double*)&buf[buf_idx];
@@ -1446,6 +1451,7 @@ load_beacon(uint32_t seconds)
     if (beacon_info.us915) {
         unsigned int sp = seconds / beacon_period;
         chan_ret = sp & 7;
+        printf("ch%u ", chan_ret);
         beacon_info.hz = 923300000 + (600000 * chan_ret);
     } else
         chan_ret = 0;
@@ -1516,14 +1522,14 @@ int pps(uint32_t trig_tstamp)
     }
 
     if (!gps_time_valid)
-        printf("[31mgps sec:%lu[0m\n", time_ptr_->tv_sec);
+        printf("\e[31mgps sec:%lu\e[0m\n", time_ptr_->tv_sec);
 
     if ((time_ptr_->tv_sec & beacon_period_mask) == beacon_period_mask) {
         printf("load_beacon pps sec:%lx   tstamp:%u, ", time_ptr_->tv_sec, trig_tstamp);
         if (gps_time_valid)
             printf(" pps_cnt:%u\n", pps_cnt);
         else
-            printf(" [31mpps_cnt:%u[0m\n", pps_cnt);
+            printf(" \e[31mpps_cnt:%u\e[0m\n", pps_cnt);
 
         pps_cnt = 0;
         beacon_sent_seconds.tv_sec = time_ptr_->tv_sec + 1;
@@ -2054,7 +2060,7 @@ main (int argc, char **argv)
             uint32_t trig_tstamp;
             lgw_get_trigcnt(&trig_tstamp);
             if (trig_tstamp != first_trig_tstamp) {
-                if (_first_pps(trig_tstamp)) {
+                if (first_pps(trig_tstamp)) {
                     get_first_pps = false; // done getting first pps
                     printf("got first pps\n");
                 }

@@ -1,4 +1,4 @@
-#define PROT_VER        2
+#define PROT_VER        3
 
 
 #define REQ_CONF                0
