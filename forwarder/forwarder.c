@@ -1147,7 +1147,7 @@ downlink_service()
     }
     if (nbytes == 0) {
         /* likely server disconnected */
-        printf("server read nbytes == 0\n");
+        printf("\e[33mserver read nbytes == 0\e[0m\n");
         return -1;
     }
     //printf("server_downlink_service() read nbytes:%d\n", nbytes);
