@@ -35,3 +35,14 @@ else (16ch)
 endif (16ch)
 
 
+list(APPEND multi_fwd_sources
+    ${CMAKE_CURRENT_SOURCE_DIR}/multi_fwd.c
+)
+
+add_executable(multi_fwd ${multi_fwd_sources})
+target_link_libraries(multi_fwd
+    json-c
+    ${MATH_LIB}
+    ${P_LIB}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../lora_gateway/libloragw/libloragw.a
+)

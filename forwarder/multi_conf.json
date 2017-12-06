@@ -137,9 +137,11 @@
     "gateway_conf": {
         "gps_tty_path": "/dev/ttyAMA0",
         "run_rate_ms": 50,
-        "server_address": "localhost",
         "server_retry_wait_ms": 2000,
-        "server_port": 5555
+        "servers" : [
+            { "hostname" : "localhost", "port" : 5555 },
+            { "hostname" : "localhost", "port" : 5556 }
+        ]
     }
 
 }

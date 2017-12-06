@@ -37,7 +37,7 @@ bool tx_invert;
 /* Gateway specificities */
 static int8_t antenna_gain = 0;
 unsigned char mac_address[6];   /* unique identifier */
-long run_rate_usec;
+unsigned long run_rate_usec;
 int server_retry_wait_us;  /* how long to wait before connect retry */
 
 /* TX capabilities */
