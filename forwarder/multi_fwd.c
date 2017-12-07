@@ -21,6 +21,8 @@ typedef struct {
     int sock;
     bool receive_config;
     int server_retry_cnt_down;
+    float rssiOffset;
+    float snrOffset;
 } srv_t;
 
 struct _srv_list {
@@ -1017,12 +1019,16 @@ parse_config(const char* conf_file)
                     strncpy(sl->srv.hostname, json_object_get_string(o), sizeof(sl->srv.hostname)); 
                 if (json_object_object_get_ex(ajo, "port", &o))
                     sl->srv.port = json_object_get_int(o);
+                if (json_object_object_get_ex(ajo, "rssiOffset", &o))
+                    sl->srv.rssiOffset = json_object_get_double(o);
+                if (json_object_object_get_ex(ajo, "snrOffset", &o))
+                    sl->srv.snrOffset = json_object_get_double(o);
 
                 if (++i < alen) {
                     sl->next = calloc(1, sizeof(struct _srv_list));
                     sl = sl->next;
                 }
-            }
+            } // ..for (i = 0; i < alen; )
         }
 
         if (json_object_object_get_ex(obj, "forward_crc_valid", &ob)) 
@@ -1448,13 +1454,13 @@ void put_server_downlink(const uint8_t* const user_buf)
 }
 
 int
-downlink_service(int sock)
+downlink_service(const srv_t* srv)
 {
     uint8_t user_buf[512];
     int nbytes;//, bytes_available = 0;
     unsigned int len;
 
-    nbytes = read(sock, user_buf, sizeof(user_buf));
+    nbytes = read(srv->sock, user_buf, sizeof(user_buf));
     if (nbytes < 0) {
         perror("sock-read");
         return -1;
@@ -1465,6 +1471,7 @@ downlink_service(int sock)
         return -1;
     }
     //printf("server_downlink_service() read nbytes:%d\n", nbytes);
+    printf("from %s:%u ", srv->hostname, srv->port);
 
     len = user_buf[1];
     len |= user_buf[2] << 8;
@@ -1515,6 +1522,7 @@ int connect_to_server(const char* serv_addr, uint16_t serv_port)
     extern void init_sockaddr (struct sockaddr_in *name, const char *hostname, uint16_t port);
     struct sockaddr_in servername;
     int sock;
+    char str[128];
 
     /* Create the socket. */
     sock = socket (PF_INET, SOCK_STREAM, 0);
@@ -1525,11 +1533,12 @@ int connect_to_server(const char* serv_addr, uint16_t serv_port)
     }
 
     /* Connect to the server. */
-    printf("attempting server %s\n", serv_addr);
+    printf("attempting %s:%u\n", serv_addr, serv_port);
     init_sockaddr (&servername, serv_addr, serv_port);
     if (0 > connect (sock, (struct sockaddr *) &servername, sizeof (servername)))
     {
-        perror ("connect to server");
+        sprintf(str, "connect %s:%u ", serv_addr, serv_port);
+        perror(str);
         close(sock);
         return -1;
     }
@@ -1557,12 +1566,6 @@ uplink_service()
         return 0;
     }
 
-    for (i = 0; i < nb_pkt; ++i) {
-        uint16_t* u16_ptr;
-        uint32_t* u32_ptr;
-        unsigned int buf_idx = 0;
-        uint8_t user_buf[sizeof(struct lgw_pkt_rx_s)];
-        struct lgw_pkt_rx_s *p = &rxpkt[i];
 #if 0
     uint32_t    freq_hz;        /*!> central frequency of the IF chain */
     uint8_t     if_chain;       /*!> by which IF chain was packet received */
@@ -1581,88 +1584,99 @@ uplink_service()
     uint16_t    size;           /*!> payload size in bytes */
     uint8_t     payload[256];   /*!> buffer containing the payload */
 #endif /* #if 0 */
-        switch(p->status) {
-            case STAT_CRC_OK:
-                printf("rx STAT_CRC_OK\n");
-                if (!fwd_valid_pkt) {
-                    continue;
-                }
-                break;
-            case STAT_CRC_BAD:
-                if (p->snr > -3)
-                    printf("rx STAT_CRC_BAD snr:%.1f rssi:%.0f\n", p->snr, p->rssi);
-                if (!fwd_error_pkt) {
-                    continue;
-                }
-                break;
-            case STAT_NO_CRC:
-                printf("rx STAT_NO_CRC\n");
-                if (!fwd_nocrc_pkt) {
-                    continue;
-                }
-                break;
-            default:
-                printf("rx status:<%d>\n", p->status);
-                continue;
-        } // ..switch(p->status)
 
-        u32_ptr = (uint32_t*)&user_buf[buf_idx];
-        *u32_ptr = p->freq_hz;
-        buf_idx += sizeof(p->freq_hz);
-        printf("rx freq_hz:%u ", *u32_ptr);
-
-        user_buf[buf_idx++] = p->if_chain;
-        user_buf[buf_idx++] = p->status;
-
-        u32_ptr = (uint32_t*)&user_buf[buf_idx];
-        *u32_ptr = p->count_us;
-        buf_idx += sizeof(p->count_us);
-
-        user_buf[buf_idx++] = p->rf_chain;
-        user_buf[buf_idx++] = p->modulation;
-        user_buf[buf_idx++] = p->bandwidth;
-
-        u32_ptr = (uint32_t*)&user_buf[buf_idx];
-        *u32_ptr = p->datarate;
-        buf_idx += sizeof(p->datarate);
-
-        user_buf[buf_idx++] = p->coderate;
-
-        memcpy(&user_buf[buf_idx], &p->rssi, sizeof(p->rssi));
-        buf_idx += sizeof(p->rssi);
-
-        memcpy(&user_buf[buf_idx], &p->snr, sizeof(p->snr));
-        buf_idx += sizeof(p->snr);
-        printf("snr:%.1f rssi:%.0f ", p->snr, p->rssi);
-
-        memcpy(&user_buf[buf_idx], &p->snr_min, sizeof(p->snr_min));
-        buf_idx += sizeof(p->snr_min);
-
-        memcpy(&user_buf[buf_idx], &p->snr_max, sizeof(p->snr_max));
-        buf_idx += sizeof(p->snr_max);
-
-        u16_ptr = (uint16_t*)&user_buf[buf_idx];
-        *u16_ptr = p->crc;
-        buf_idx += sizeof(p->crc);
-
-        u16_ptr = (uint16_t*)&user_buf[buf_idx];
-        *u16_ptr = p->size;
-        buf_idx += sizeof(p->size);
-
-        if (p->size > sizeof(p->payload)) {
-            printf("oversized %u\n", p->size);
-            continue;
-        } else
-            printf("size:%u\n", p->size);
-
-
-        memcpy(user_buf+buf_idx, p->payload, p->size);
-        buf_idx += p->size;
-
-        user_buf[buf_idx++] = 0;    /* which modem receiving (always 0) */
-
+    for (i = 0; i < nb_pkt; ++i) {
         struct _srv_list *sl;
+        struct lgw_pkt_rx_s *p = &rxpkt[i];
         for (sl = srv_list; sl != NULL; sl = sl->next) {
+            uint16_t* u16_ptr;
+            uint32_t* u32_ptr;
+            unsigned int buf_idx = 0;
+            uint8_t user_buf[sizeof(struct lgw_pkt_rx_s)];
+            float rssi = p->rssi + sl->srv.rssiOffset;
+            float snr = p->snr + sl->srv.snrOffset;
+
+            switch(p->status) {
+                case STAT_CRC_OK:
+                    printf("rx STAT_CRC_OK\n");
+                    if (!fwd_valid_pkt) {
+                        continue;
+                    }
+                    break;
+                case STAT_CRC_BAD:
+                    if (p->snr > -3)
+                        printf("rx STAT_CRC_BAD snr:%.1f rssi:%.0f\n", p->snr, p->rssi);
+                    if (!fwd_error_pkt) {
+                        continue;
+                    }
+                    break;
+                case STAT_NO_CRC:
+                    printf("rx STAT_NO_CRC\n");
+                    if (!fwd_nocrc_pkt) {
+                        continue;
+                    }
+                    break;
+                default:
+                    printf("rx status:<%d>\n", p->status);
+                    continue;
+            } // ..switch(p->status)
+
+            u32_ptr = (uint32_t*)&user_buf[buf_idx];
+            *u32_ptr = p->freq_hz;
+            buf_idx += sizeof(p->freq_hz);
+            printf("rx freq_hz:%u ", *u32_ptr);
+
+            user_buf[buf_idx++] = p->if_chain;
+            user_buf[buf_idx++] = p->status;
+
+            u32_ptr = (uint32_t*)&user_buf[buf_idx];
+            *u32_ptr = p->count_us;
+            buf_idx += sizeof(p->count_us);
+
+            user_buf[buf_idx++] = p->rf_chain;
+            user_buf[buf_idx++] = p->modulation;
+            user_buf[buf_idx++] = p->bandwidth;
+
+            u32_ptr = (uint32_t*)&user_buf[buf_idx];
+            *u32_ptr = p->datarate;
+            buf_idx += sizeof(p->datarate);
+
+            user_buf[buf_idx++] = p->coderate;
+
+            /* rssi and snr both float */
+            memcpy(&user_buf[buf_idx], &rssi, sizeof(p->rssi));
+            buf_idx += sizeof(p->rssi);
+
+            memcpy(&user_buf[buf_idx], &snr, sizeof(p->snr));
+            buf_idx += sizeof(p->snr);
+            printf("(%u snr:%.1f rssi:%.0f)  ", sl->srv.port, snr, rssi);
+
+            memcpy(&user_buf[buf_idx], &p->snr_min, sizeof(p->snr_min));
+            buf_idx += sizeof(p->snr_min);
+
+            memcpy(&user_buf[buf_idx], &p->snr_max, sizeof(p->snr_max));
+            buf_idx += sizeof(p->snr_max);
+
+            u16_ptr = (uint16_t*)&user_buf[buf_idx];
+            *u16_ptr = p->crc;
+            buf_idx += sizeof(p->crc);
+
+            u16_ptr = (uint16_t*)&user_buf[buf_idx];
+            *u16_ptr = p->size;
+            buf_idx += sizeof(p->size);
+
+            if (p->size > sizeof(p->payload)) {
+                printf("oversized %u\n", p->size);
+                continue;
+            } else
+                printf("size:%u\n", p->size);
+
+
+            memcpy(user_buf+buf_idx, p->payload, p->size);
+            buf_idx += p->size;
+
+            user_buf[buf_idx++] = 0;    /* which modem receiving (always 0) */
+
             write_to_server(&sl->srv, UPLINK, user_buf, buf_idx);
         }
     } // ..for (i = 0; i < nb_pkt; ++i)
@@ -1748,7 +1762,10 @@ main (int argc, char **argv)
             gps_service(gps_tty_fd);
         } else /*if (connected_to_server)*/ {
             for (sl = srv_list; sl != NULL; sl = sl->next) {
-                srv_t* srv = &sl->srv;
+                srv_t* srv;
+                if (!sl->srv.connected_to_server)
+                    continue;
+                srv = &sl->srv;
                 if (FD_ISSET(srv->sock, &active_fd_set)) {
                     if (srv->receive_config) {
                         if (get_server_config(srv->sock) == 0) {
@@ -1788,7 +1805,7 @@ main (int argc, char **argv)
                             sleep(4);
                         }
                     } else {
-                        if (downlink_service(srv->sock) < 0) {
+                        if (downlink_service(srv) < 0) {
                             if (&sl->srv == &srv_list->srv) {  // if primary server
                                 lgw_stop();
                                 lgw_started = false;

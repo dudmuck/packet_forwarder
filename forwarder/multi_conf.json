@@ -139,8 +139,8 @@
         "run_rate_ms": 50,
         "server_retry_wait_ms": 2000,
         "servers" : [
-            { "hostname" : "localhost", "port" : 5555 },
-            { "hostname" : "localhost", "port" : 5556 }
+            { "hostname" : "localhost", "port" : 5555, "rssiOffset" : 0, "snrOffset": 1.5 },
+            { "hostname" : "localhost", "port" : 5556, "rssiOffset" : 0, "snrOffset": -2.5 }
         ]
     }
 
