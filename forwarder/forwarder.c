@@ -723,7 +723,7 @@ gps_service(int fd)
                         int i = lgw_gps_get(&g_utc_time, &this_gps_time, NULL, NULL);
                         //MSG("UBX_NAV_TIMEGPS ");
                         if (i != LGW_GPS_SUCCESS) {
-                            MSG("WARNING: [gps] could not get GPS time from GPS\n");
+                            MSG("WARNING: [ubx gps] could not get GPS time from GPS\n");
                             gps_time_valid = false;
                         } else {
                             //printf("gps_time:%lu.%09lu ->", this_gps_time.tv_sec, this_gps_time.tv_nsec);
@@ -761,7 +761,7 @@ gps_service(int fd)
                     } else if (latest_msg == NMEA_RMC || latest_msg == NMEA_GGA) {
                         int i = lgw_gps_get(&g_utc_time, &this_gps_time, &coord, NULL);
                         if (i != LGW_GPS_SUCCESS) {
-                            MSG("WARNING: [gps] could not get GPS time from GPS\n");
+                            MSG("WARNING: [nmea gps] could not get GPS time from GPS\n");
                             gps_time_valid = false;
                         } else {
                             //printf("# GPS coordinates: latitude %.5f, longitude %.5f, altitude %i m\n", coord.lat, coord.lon, coord.alt);
@@ -1117,7 +1117,7 @@ void put_server_downlink(const uint8_t* const user_buf)
                 break;
         }
         if (i == NUM_TX_PKTS) {
-            printf("tx_pkts full\n");
+            printf("\e[31mtx_pkts full\e[0m\n");
             return;
         }
 

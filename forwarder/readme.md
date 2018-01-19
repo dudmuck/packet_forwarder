@@ -4,6 +4,8 @@ This packet forwarder supports LoRaWAN class-B specification on gateway.   Class
 
 Gateway does not implement any LoRaWAN protocol.  Gateway transfers packets between end-nodes and LoRaWAN server.  However, forwarder generates beacon packets because they provide timing reference from GPS receiver.
 
+Requires json-c library, ie `apt-get install libjson-c-dev`
+
 # Building forwarder
 `lora_gateway` must be compiled as first step, HAL driver for gateway.  Both `lora_gateway` repository and `packet_forwarder` repository must reside in same directory.
 1. `mkdir build`

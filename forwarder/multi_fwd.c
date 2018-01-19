@@ -23,6 +23,8 @@ typedef struct {
     int server_retry_cnt_down;
     float rssiOffset;
     float snrOffset;
+    uint8_t macAddrOffset;
+    bool disabled;
 } srv_t;
 
 struct _srv_list {
@@ -234,7 +236,7 @@ write_to_server(srv_t* srv, uint8_t cmd, uint8_t* user_buf, uint16_t user_buf_le
     msg[5] = mac_address[2];
     msg[6] = mac_address[3];
     msg[7] = mac_address[4];
-    msg[8] = mac_address[5];
+    msg[8] = mac_address[5] + srv->macAddrOffset;
 
     if (*msg_len > sizeof(msg)) {
         printf("msg[] to small\n");
@@ -498,18 +500,32 @@ stdin_read()
     int stdin_len = read(STDIN_FILENO, line, sizeof(line));
 
     if (stdin_len == 2) {   // single char and newline
+        struct _srv_list *sl;
         switch (line[0]) {
+            unsigned n;
             case '.':
                 printf("eui:");
                 for (i = 0; i<6; i++)
                     printf("%02x ", mac_address[i]);
                 printf("\npps_cnt:%u\n", pps_cnt);
                 printf("gps_pps_valid:%d\n", gps_pps_valid);
+                n = 0;
+                for (sl = srv_list; sl != NULL; sl = sl->next) {
+                    const srv_t* srv = &sl->srv;
+                    printf("%u) %s %u rssi:%.2f snr:%.2f", n, srv->hostname, srv->port, srv->rssiOffset, srv->snrOffset);
+                    if (srv->disabled)
+                        printf(" disabled");
+                    printf("\n");
+                    n++;
+                }
                 break;
             default:
                 printf(".       print status\n");
                 printf("sb%%u       skip beacons\n");
                 printf("sd%%u       skip downlinks\n");
+                printf("so%%u <dB>      set snr offset\n");
+                printf("ro%%u <dB>      set rssi offset\n");
+                printf("d%%u        toggle disable/enable of uplink forwarding\n");
                 break;
         } // ..switch (line[0])
     } else {
@@ -519,6 +535,42 @@ stdin_read()
         } else if (line[0] == 's' && line[1] == 'd') {
             sscanf(line+2, "%u", &skip_downlink_cnt);
             printf("skip_downlink_cnt:%u\n", skip_downlink_cnt);
+        } else if (line[0] == 'd' && line[1] >= '0' && line[1] <= '9') {
+            struct _srv_list *sl;
+            uint8_t n = 0, target = line[1] - '0';
+            for (sl = srv_list; sl != NULL; sl = sl->next) {
+                if (n == target) {
+                    srv_t* srv = &sl->srv;
+                    srv->disabled ^= true;
+                    printf("setting srv%u ", n);
+                    if (srv->disabled)
+                        printf("disabled\n");
+                    else
+                        printf("ENabled\n");
+                    break;
+                }
+                n++;
+            }
+        } else if ((line[0] == 's' || line[0] == 'r') && line[1] == 'o' && line[2] >= '0' && line[2] <= '9') {
+            struct _srv_list *sl;
+            uint8_t n = 0, target = line[2] - '0';
+            float ofs;
+            sscanf(line+4, "%f", &ofs);
+            for (sl = srv_list; sl != NULL; sl = sl->next) {
+                if (n == target) {
+                    srv_t* srv = &sl->srv;
+                    printf("setting srv%u ", n);
+                    if (line[0] == 's') {
+                        srv->snrOffset = ofs;
+                        printf("snr offset %f\n", srv->snrOffset);
+                    } else {
+                        srv->rssiOffset = ofs;
+                        printf("rssi offset %f\n", srv->rssiOffset);
+                    }
+                    break;
+                }
+                n++;
+            }
         }
     }
 }
@@ -1023,6 +1075,8 @@ parse_config(const char* conf_file)
                     sl->srv.rssiOffset = json_object_get_double(o);
                 if (json_object_object_get_ex(ajo, "snrOffset", &o))
                     sl->srv.snrOffset = json_object_get_double(o);
+
+                sl->srv.macAddrOffset = i;
 
                 if (++i < alen) {
                     sl->next = calloc(1, sizeof(struct _srv_list));
@@ -1593,8 +1647,13 @@ uplink_service()
             uint32_t* u32_ptr;
             unsigned int buf_idx = 0;
             uint8_t user_buf[sizeof(struct lgw_pkt_rx_s)];
-            float rssi = p->rssi + sl->srv.rssiOffset;
-            float snr = p->snr + sl->srv.snrOffset;
+            float rssi, snr;
+
+            if (sl->srv.disabled)
+                continue;
+
+            rssi = p->rssi + sl->srv.rssiOffset;
+            snr = p->snr + sl->srv.snrOffset;
 
             switch(p->status) {
                 case STAT_CRC_OK:
@@ -1682,7 +1741,7 @@ uplink_service()
     } // ..for (i = 0; i < nb_pkt; ++i)
 
     return 0;
-}
+} // ..uplink_service()
 
 int
 main (int argc, char **argv)
