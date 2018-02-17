@@ -22,6 +22,7 @@
 
 #define STRINGIFY(x)    #x
 #define STR(x)          STRINGIFY(x)
+#define NUM_MODEMS      1   /* TODO: get from json: how many sx1301 */
 
 /* sx1301 configuration */
 struct lgw_conf_board_s _boardconf;
@@ -734,6 +735,8 @@ gps_service(int fd)
                             }
                             g_gps_time.tv_nsec = 0;
                             //printf("gps_time:%lx.%09lx\n", g_gps_time.tv_sec, g_gps_time.tv_nsec);
+                            if (!gps_time_valid)
+                                MSG("gps ok\n");
                             gps_time_valid = true;
                         }
                     } else {
@@ -766,6 +769,8 @@ gps_service(int fd)
                         } else {
                             //printf("# GPS coordinates: latitude %.5f, longitude %.5f, altitude %i m\n", coord.lat, coord.lon, coord.alt);
                             //printf("utc:%lu.%09lu\n", g_utc_time.tv_sec, g_utc_time.tv_nsec);
+                            if (!gps_time_valid)
+                                MSG("gps ok\n");
                             gps_time_valid = true;
                         }
                     } else {
@@ -909,6 +914,7 @@ notify_server(uint32_t tstamp_at_beacon_tx, uint32_t beacon_sent_seconds, uint8_
 #define TX_PRELOAD_US           200000
 #define NUM_TX_PKTS     4
 struct lgw_pkt_tx_s tx_pkts[NUM_TX_PKTS];
+int force_tx_dbm = INT_MIN;
 
 /* return true for gps fix re-aquired */
 bool gw_tx_service(bool im)
@@ -1013,6 +1019,9 @@ void put_server_downlink(const uint8_t* const user_buf)
     idx++;  // rf_chain from server ignored
     tx_pkt.rf_chain = tx_rf_chain;
     tx_pkt.rf_power = user_buf[idx++];
+    if (force_tx_dbm != INT_MIN) 
+        tx_pkt.rf_power = force_tx_dbm;
+
     tx_pkt.modulation = user_buf[idx++];
     tx_pkt.bandwidth = user_buf[idx++];
 
@@ -1081,22 +1090,13 @@ void put_server_downlink(const uint8_t* const user_buf)
     /* check dBm transmit level */
     for (i = 0; i < txlut.size; i++) {
         if (tx_pkt.rf_power == txlut.lut[i].rf_power) {
-            printf(" txlut%d ", i);
+            printf(" txlut%d exact %ddBm ", i, tx_pkt.rf_power);
             break;  // exact dBm found
-        }
-    }
-    if (i == txlut.size) {
-        /* dBm not found, use closest power availble */
-        printf("\e[31m%ddBm not found\e[0m ", tx_pkt.rf_power);
-        if (tx_pkt.rf_power < txlut.lut[0].rf_power)
-            tx_pkt.rf_power = txlut.lut[0].rf_power;
-        else {
-            for (i = txlut.size-1; i >= 0; i--) {
-                if (tx_pkt.rf_power < txlut.lut[i].rf_power) {
-                    tx_pkt.rf_power = txlut.lut[i].rf_power;
-                    break;
-                }
-            }
+        } else if (txlut.lut[i].rf_power > tx_pkt.rf_power) {
+            printf(" %ddBm -> ", tx_pkt.rf_power);
+            tx_pkt.rf_power = txlut.lut[i].rf_power;
+            printf(" txlut%d nearest %ddBm ", i, tx_pkt.rf_power);
+            break;
         }
     }
 
@@ -1816,17 +1816,23 @@ stdin_read()
                     printf("%02x ", mac_address[i]);
                 printf("\npps_cnt:%u\n", pps_cnt);
                 printf("gps_pps_valid:%d\n", gps_pps_valid);
+                if (force_tx_dbm != INT_MIN)
+                    printf("force_tx_dbm:%d\n", force_tx_dbm);
                 break;
             default:
                 printf(".       print status\n");
                 printf("sb%%u       skip beacons\n");
                 printf("sd%%u       skip downlinks\n");
+                printf("ftx%%d       force TX dBm\n");
                 break;
         } // ..switch (line[0])
     } else {
         if (line[0] == 's' && line[1] == 'b') {
             sscanf(line+2, "%u", &skip_beacon_cnt);
             printf("skip_beacon_cnt:%u\n", skip_beacon_cnt);
+        } else if (line[0] == 'f' && line[1] == 't' && line[2] == 'x') {
+            sscanf(line+3, "%d", &force_tx_dbm);
+            printf("force_tx_dbm:%d\n", force_tx_dbm);
         } else if (line[0] == 's' && line[1] == 'd') {
             sscanf(line+2, "%u", &skip_downlink_cnt);
             printf("skip_downlink_cnt:%u\n", skip_downlink_cnt);
@@ -1839,7 +1845,7 @@ main (int argc, char **argv)
 {
     uint32_t first_trig_tstamp;
     bool get_first_pps = false;
-    bool receive_config = false;
+    time_t conf_req_at = 0;
     unsigned int server_retry_cnt_down = 0;
     fd_set active_fd_set;
     int maxfd, gps_tty_fd = -1; /* file descriptor of the GPS TTY port */
@@ -1968,6 +1974,19 @@ main (int argc, char **argv)
         timeout.tv_sec = 0;
         timeout.tv_usec = run_rate_usec;
         retval = select(maxfd, &active_fd_set, NULL, NULL, &timeout);
+
+        if (conf_req_at != 0 && connected_to_server)  { // configuration requested, but not received
+            time_t since = time(NULL) - conf_req_at;
+            if (since > 5) {
+                uint8_t buf[8];
+                uint32_t* u32_ptr = (uint32_t*)buf;
+                *u32_ptr = PROT_VER;
+                buf[4] = NUM_MODEMS;
+                write_to_server(REQ_CONF, buf, sizeof(uint32_t)+1);
+                conf_req_at = time(NULL);
+                printf("re-request config\n");
+            }
+        }
         if (retval < 0) { 
             perror("select");
             return -1;
@@ -1977,10 +1996,10 @@ main (int argc, char **argv)
             gps_service(gps_tty_fd);
         } else if (connected_to_server) {
             if (FD_ISSET(_sock, &active_fd_set)) {
-                if (receive_config) {
+                if (conf_req_at != 0) { // configuration requested, but not received
                     if (get_server_config() == 0) {
                         printf("get_server_config() OK\n");
-                        receive_config = false;
+                        conf_req_at = 0;
 
                         if (check_sx1301_config() < 0) {
                             /* check failed */
@@ -2043,16 +2062,16 @@ main (int argc, char **argv)
                 uint8_t buf[8];
                 uint32_t* u32_ptr = (uint32_t*)buf;
                 *u32_ptr = PROT_VER;
-                buf[4] = 1; /* num_modems: one sx1301 */
+                buf[4] = NUM_MODEMS;
                 printf("server-connected\n");
                 connected_to_server = true;
 
                 /* request config from server */
                 write_to_server(REQ_CONF, buf, sizeof(uint32_t)+1);
 
-                receive_config = true;
                 FD_SET(_sock, &active_fd_set);
                 maxfd = MAX(gps_tty_fd, _sock) + 1;
+                conf_req_at = time(NULL);
             } else {
                 server_retry_cnt_down = server_retry_wait_us;
             }
